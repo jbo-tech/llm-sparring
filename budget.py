@@ -9,6 +9,8 @@ Tracks usage and enforces limits:
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any
@@ -99,11 +101,17 @@ class BudgetManager:
                 logger.warning(f"Could not load tracking file: {e}")
     
     def _save_tracking(self):
-        """Save usage tracking to file."""
+        """Save usage tracking to file (atomic write)."""
         try:
             self.tracking_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.tracking_file, "w") as f:
-                json.dump(self.tracking, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=self.tracking_file.parent)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(self.tracking, f, indent=2)
+                os.replace(tmp_path, self.tracking_file)
+            except:
+                os.unlink(tmp_path)
+                raise
         except Exception as e:
             logger.warning(f"Could not save tracking file: {e}")
     

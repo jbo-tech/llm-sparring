@@ -17,6 +17,8 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,20 @@ server = Server("sparring")
 # Global managers (initialized on startup)
 provider_manager: ProviderManager | None = None
 budget_manager: BudgetManager | None = None
+
+# Limits
+MAX_PROMPT_CHARS = 50000
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token."""
+    return len(text) // 4
+
+
+def _ensure_initialized():
+    """Raise if managers not initialized."""
+    if provider_manager is None or budget_manager is None:
+        raise RuntimeError("Server not initialized")
 
 
 def get_config_path() -> Path:
@@ -298,15 +314,25 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 async def handle_ask_model(args: dict) -> dict:
     """Handle ask_model tool."""
+    _ensure_initialized()
     model_name = args["model"]
     question = args["question"]
     context = args.get("context", "")
     max_tokens = args.get("max_tokens", 1000)
-    
+
+    # Build prompt
+    prompt = question
+    if context:
+        prompt = f"Context:\n{context}\n\nQuestion:\n{question}"
+
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return {"error": "Prompt too large", "chars": len(prompt), "limit": MAX_PROMPT_CHARS}
+
     # Check budget
-    cost_estimate = budget_manager.estimate_request_cost(model_name, 500, max_tokens)
+    estimated_input = _estimate_tokens(prompt)
+    cost_estimate = budget_manager.estimate_request_cost(model_name, estimated_input, max_tokens)
     budget_check = budget_manager.check_budget(cost_estimate)
-    
+
     if not budget_check["allowed"]:
         return {
             "error": "Budget exceeded",
@@ -314,12 +340,7 @@ async def handle_ask_model(args: dict) -> dict:
             "estimated_cost": cost_estimate,
             "usage": budget_manager.get_usage(),
         }
-    
-    # Build prompt
-    prompt = question
-    if context:
-        prompt = f"Context:\n{context}\n\nQuestion:\n{question}"
-    
+
     # Query model
     response = await provider_manager.query(model_name, prompt, max_tokens)
     
@@ -345,22 +366,32 @@ async def handle_ask_model(args: dict) -> dict:
 
 async def handle_ask_all(args: dict) -> dict:
     """Handle ask_all tool."""
+    _ensure_initialized()
     question = args["question"]
     context = args.get("context", "")
     max_tokens = args.get("max_tokens", 1000)
-    
+
+    # Build prompt
+    prompt = question
+    if context:
+        prompt = f"Context:\n{context}\n\nQuestion:\n{question}"
+
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return {"error": "Prompt too large", "chars": len(prompt), "limit": MAX_PROMPT_CHARS}
+
     # Get available models
     available_models = [m["name"] for m in provider_manager.get_available_models()]
-    
+
     if not available_models:
         return {"error": "No models available"}
-    
+
     # Estimate total cost
+    estimated_input = _estimate_tokens(prompt)
     total_estimate = sum(
-        budget_manager.estimate_request_cost(m, 500, max_tokens)
+        budget_manager.estimate_request_cost(m, estimated_input, max_tokens)
         for m in available_models
     )
-    
+
     budget_check = budget_manager.check_budget(total_estimate)
     if not budget_check["allowed"]:
         return {
@@ -369,18 +400,16 @@ async def handle_ask_all(args: dict) -> dict:
             "estimated_cost": total_estimate,
             "models_requested": available_models,
         }
-    
-    # Build prompt
-    prompt = question
-    if context:
-        prompt = f"Context:\n{context}\n\nQuestion:\n{question}"
-    
-    # Query all models in parallel
-    tasks = [
-        provider_manager.query(model, prompt, max_tokens)
-        for model in available_models
-    ]
-    
+
+    # Query all models in parallel (with concurrency limit)
+    max_parallel = provider_manager.settings.get("max_parallel", 3)
+    sem = asyncio.Semaphore(max_parallel)
+
+    async def bounded_query(model):
+        async with sem:
+            return await provider_manager.query(model, prompt, max_tokens)
+
+    tasks = [bounded_query(model) for model in available_models]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     # Process results
@@ -414,24 +443,27 @@ async def handle_ask_all(args: dict) -> dict:
 
 async def handle_challenge(args: dict) -> dict:
     """Handle challenge tool with optional lens."""
+    _ensure_initialized()
     challenger = args["challenger_model"]
     original_question = args["original_question"]
     target_response = args["target_response"]
     target_source = args.get("target_source", "unknown source")
     lens = args.get("lens", None)
     language = args.get("language", "fr")
-    
+    lens_warning = None
+
+    # Validate lens if provided
+    if lens is not None:
+        lens, lens_warning = validate_lens(lens)
+
     # Build prompt based on lens
     if lens is not None:
-        # Use lens-based challenge prompt
-        lens = validate_lens(lens)
         prompt = get_challenge_prompt(
             lens=lens,
             original_question=original_question,
             original_response=target_response,
             language=language,
         )
-        # Add source context
         prompt = prompt.replace(
             "## Réponse à challenger",
             f"## Réponse à challenger (source: {target_source})"
@@ -458,6 +490,21 @@ Donne ton analyse critique de cette réponse :
 
 Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
 
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return {"error": "Prompt too large", "chars": len(prompt), "limit": MAX_PROMPT_CHARS}
+
+    # Check budget
+    estimated_input = _estimate_tokens(prompt)
+    cost_estimate = budget_manager.estimate_request_cost(challenger, estimated_input, 1500)
+    budget_check = budget_manager.check_budget(cost_estimate)
+
+    if not budget_check["allowed"]:
+        return {
+            "error": "Budget exceeded",
+            "reason": budget_check["reason"],
+            "estimated_cost": cost_estimate,
+        }
+
     # Query challenger
     response = await provider_manager.query(challenger, prompt, 1500)
     
@@ -476,19 +523,23 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
         "critique": response.get("content", response.get("error", "No response")),
     }
     
-    # Include lens info if used
+    # Include lens info
     if lens is not None:
         result["lens"] = lens
         result["lens_description"] = LENSES[lens]["description"]
     else:
         result["lens"] = None
         result["lens_description"] = "Natural critique (no lens)"
-    
+
+    if lens_warning:
+        result["warning"] = lens_warning
+
     return result
 
 
 async def handle_get_models() -> dict:
     """Handle get_models tool."""
+    _ensure_initialized()
     all_models = provider_manager.get_all_models()
     available = provider_manager.get_available_models()
     available_names = {m["name"] for m in available}
@@ -521,11 +572,13 @@ async def handle_get_lenses() -> dict:
 
 async def handle_get_usage() -> dict:
     """Handle get_usage tool."""
+    _ensure_initialized()
     return budget_manager.get_usage()
 
 
 async def handle_estimate_cost(args: dict) -> dict:
     """Handle estimate_cost tool."""
+    _ensure_initialized()
     models = args["models"]
     input_tokens = args.get("input_tokens", 500)
     output_tokens = args.get("output_tokens", 1000)
@@ -568,7 +621,17 @@ async def main():
     logger.info(f"Config: {get_config_path()}")
     logger.info(f"Available sparring partners: {[m['name'] for m in provider_manager.get_available_models()]}")
     logger.info(f"Available lenses: {list(LENSES.keys())}")
-    
+
+    # Graceful shutdown
+    def handle_shutdown(signum, frame):
+        logger.info(f"Received signal {signum}, saving tracking...")
+        if budget_manager:
+            budget_manager._save_tracking()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
     # Run server
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())

@@ -195,8 +195,8 @@ def get_lens_list() -> list[dict]:
     ]
 
 
-def validate_lens(lens: str) -> str:
-    """Validate lens name, return default if invalid."""
+def validate_lens(lens: str) -> tuple[str | None, str | None]:
+    """Validate lens. Returns (lens, warning). None lens means natural critique."""
     if lens in LENSES:
-        return lens
-    return DEFAULT_LENS
+        return lens, None
+    return None, f"Unknown lens '{lens}', using natural critique"
