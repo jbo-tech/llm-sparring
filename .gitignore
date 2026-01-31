@@ -1,0 +1,43 @@
+# Secrets
+.env
+*.env
+configs/*-local.yaml
+.current_instance_id
+rclone.conf
+plex_libraries.json
+
+# Backups
+backups/*.tar.gz
+backups/*.zip
+*.backup
+plex_*.tar.gz
+
+# Logs
+logs/
+*.log
+
+# Temp
+/tmp/
+*.tmp
+.cache/
+tmp/
+.megaignore
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.python-version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.claude/secrets/
+.claude/cache/
+.claude/logs/
+
+# OS
+.DS_Store
+Thumbs.db

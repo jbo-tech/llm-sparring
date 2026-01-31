@@ -1,0 +1,221 @@
+# Sparring Configuration
+# Make your LLMs disagree.
+# Copy to ~/.config/sparring/config.yaml
+
+# =============================================================================
+# Models Configuration
+# =============================================================================
+# 
+# Supported providers (OpenAI-compatible):
+#   - openai      → OPENAI_API_KEY
+#   - openrouter  → OPENROUTER_API_KEY (recommended: 400+ models, 1 key)
+#   - mistral     → MISTRAL_API_KEY
+#   - deepseek    → DEEPSEEK_API_KEY
+#   - groq        → GROQ_API_KEY (fast inference)
+#   - together    → TOGETHER_API_KEY
+#   - xai         → XAI_API_KEY (Grok)
+#   - ollama      → No key needed (local)
+#
+# Other providers:
+#   - anthropic   → ANTHROPIC_API_KEY
+#   - google      → GOOGLE_API_KEY
+#   - custom      → Any OpenAI-compatible endpoint
+
+models:
+  # ===========================================================================
+  # OpenAI
+  # ===========================================================================
+  - name: "gpt-4o"
+    provider: "openai"
+    model_id: "gpt-4o"
+    enabled: true
+    
+  - name: "gpt-4o-mini"
+    provider: "openai"
+    model_id: "gpt-4o-mini"
+    enabled: true
+
+  # ===========================================================================
+  # Google Gemini
+  # ===========================================================================
+  - name: "gemini-flash"
+    provider: "google"
+    model_id: "gemini-2.0-flash"
+    enabled: true
+    
+  - name: "gemini-pro"
+    provider: "google"
+    model_id: "gemini-1.5-pro"
+    enabled: false
+
+  # ===========================================================================
+  # Mistral
+  # ===========================================================================
+  - name: "mistral-large"
+    provider: "mistral"
+    model_id: "mistral-large-latest"
+    enabled: false
+    
+  - name: "mistral-small"
+    provider: "mistral"
+    model_id: "mistral-small-latest"
+    enabled: true
+
+  # ===========================================================================
+  # DeepSeek
+  # ===========================================================================
+  - name: "deepseek-chat"
+    provider: "deepseek"
+    model_id: "deepseek-chat"
+    enabled: true
+    
+  - name: "deepseek-reasoner"
+    provider: "deepseek"
+    model_id: "deepseek-reasoner"
+    enabled: false
+
+  # ===========================================================================
+  # Groq (very fast inference)
+  # ===========================================================================
+  - name: "groq-llama"
+    provider: "groq"
+    model_id: "llama-3.3-70b-versatile"
+    enabled: false
+    
+  - name: "groq-mixtral"
+    provider: "groq"
+    model_id: "mixtral-8x7b-32768"
+    enabled: false
+
+  # ===========================================================================
+  # xAI (Grok)
+  # ===========================================================================
+  - name: "grok"
+    provider: "xai"
+    model_id: "grok-2-latest"
+    enabled: false
+
+  # ===========================================================================
+  # OpenRouter (400+ models with one API key)
+  # See: https://openrouter.ai/models
+  # ===========================================================================
+  - name: "or-mixtral"
+    provider: "openrouter"
+    model_id: "mistralai/mixtral-8x7b-instruct"
+    enabled: true
+    
+  - name: "or-llama-70b"
+    provider: "openrouter"
+    model_id: "meta-llama/llama-3.1-70b-instruct"
+    enabled: false
+    
+  - name: "or-qwen"
+    provider: "openrouter"
+    model_id: "qwen/qwen-2.5-72b-instruct"
+    enabled: false
+
+  # ===========================================================================
+  # Anthropic (usually disabled since WE ARE Claude)
+  # ===========================================================================
+  - name: "claude-haiku"
+    provider: "anthropic"
+    model_id: "claude-3-5-haiku-20241022"
+    enabled: false
+
+  # ===========================================================================
+  # Local Models (Ollama)
+  # Requires: ollama serve running locally
+  # Pull models with: ollama pull llama3.2
+  # ===========================================================================
+  - name: "llama-local"
+    provider: "ollama"
+    model_id: "llama3.2"
+    base_url: "http://localhost:11434"
+    enabled: true
+    
+  - name: "qwen-local"
+    provider: "ollama"
+    model_id: "qwen2.5:3b"
+    base_url: "http://localhost:11434"
+    enabled: false
+    
+  - name: "mistral-local"
+    provider: "ollama"
+    model_id: "mistral"
+    base_url: "http://localhost:11434"
+    enabled: false
+    
+  - name: "phi-local"
+    provider: "ollama"
+    model_id: "phi3"
+    base_url: "http://localhost:11434"
+    enabled: false
+
+  # ===========================================================================
+  # Custom OpenAI-compatible endpoints
+  # ===========================================================================
+  # Example: Local vLLM, text-generation-webui, LM Studio, etc.
+  #
+  # - name: "local-vllm"
+  #   provider: "custom"
+  #   model_id: "mistralai/Mistral-7B-Instruct-v0.2"
+  #   base_url: "http://localhost:8000/v1"
+  #   enabled: true
+  #   requires_auth: false  # Set to true if API key needed
+  #
+  # - name: "lm-studio"
+  #   provider: "custom"
+  #   model_id: "local-model"
+  #   base_url: "http://localhost:1234/v1"
+  #   enabled: true
+  #   requires_auth: false
+
+
+# =============================================================================
+# Global Settings
+# =============================================================================
+
+settings:
+  # Timeout for API calls (seconds)
+  # Increase for slower models or high latency
+  default_timeout: 30
+  
+  # Maximum parallel requests
+  # Lower this if you hit rate limits
+  max_parallel: 3
+
+
+# =============================================================================
+# Budget Configuration
+# =============================================================================
+
+budget:
+  # Ask for confirmation if a single request exceeds this amount
+  confirm_threshold: 0.10  # $0.10
+  
+  # Maximum spend per sparring session
+  session_limit: 1.00  # $1.00
+  
+  # Maximum spend per day
+  daily_limit: 5.00  # $5.00
+  
+  # File to track usage (created automatically)
+  tracking_file: "~/.config/sparring/usage.json"
+
+
+# =============================================================================
+# Custom Pricing (optional)
+# =============================================================================
+# Override default pricing for specific models
+# Prices are per 1M tokens
+#
+# Default pricing is built into budget.py for common models.
+# Add custom pricing here for models not in the default list.
+
+# pricing:
+#   my-custom-model:
+#     input: 0.50
+#     output: 1.50
+#   or-some-openrouter-model:
+#     input: 0.10
+#     output: 0.30
