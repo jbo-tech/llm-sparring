@@ -87,6 +87,40 @@ PROVIDER_REGISTRY = {
     },
 }
 
+# Hosts autorisés pour les requêtes (sécurité SSRF)
+ALLOWED_HOSTS = {
+    # Providers officiels
+    "api.openai.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.mistral.ai",
+    "api.deepseek.com",
+    "api.groq.com",
+    "api.together.xyz",
+    "api.x.ai",
+    "openrouter.ai",
+    # Local
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+}
+
+
+def _validate_url(url: str) -> bool:
+    """Valide qu'une URL pointe vers un host autorisé."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        if host is None:
+            return False
+        # Autoriser localhost avec n'importe quel port
+        if host in ("localhost", "127.0.0.1", "0.0.0.0"):
+            return True
+        return host in ALLOWED_HOSTS
+    except Exception:
+        return False
+
 
 class ProviderManager:
     """Manages multiple LLM providers."""
@@ -109,9 +143,8 @@ class ProviderManager:
                 key = os.environ.get(env_var)
                 if key:
                     self.api_keys[provider] = key
-                    logger.info(f"API key found for {provider}")
-                else:
-                    logger.debug(f"No API key for {provider} ({env_var})")
+                    logger.debug(f"Provider {provider} configured")
+                # Ne pas logger l'absence de clé (évite l'énumération)
     
     def get_all_models(self) -> list[dict]:
         """Get all configured models."""
@@ -180,7 +213,8 @@ class ProviderManager:
             return {"error": f"Timeout querying {model_name}"}
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error querying {model_name}: {e.response.status_code}")
-            return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+            # Ne pas exposer le corps de réponse (peut contenir des infos sensibles)
+            return {"error": f"HTTP {e.response.status_code} from provider"}
         except Exception as e:
             logger.exception(f"Error querying {model_name}")
             return {"error": str(e)}
@@ -201,10 +235,14 @@ class ProviderManager:
         Works with: OpenAI, OpenRouter, Mistral, DeepSeek, Groq, Together, xAI, etc.
         """
         provider = model["provider"]
-        
+
         # Get base URL (model can override provider default)
         base_url = model.get("base_url") or provider_config["base_url"]
-        
+
+        # Validation SSRF
+        if not _validate_url(base_url):
+            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
+
         # Get API key
         api_key = None
         if provider_config.get("api_key_env"):
@@ -256,15 +294,19 @@ class ProviderManager:
     # =========================================================================
     
     async def _query_ollama(
-        self, 
-        model: dict, 
-        provider_config: dict, 
-        prompt: str, 
+        self,
+        model: dict,
+        provider_config: dict,
+        prompt: str,
         max_tokens: int
     ) -> dict:
         """Handler for local Ollama instance."""
         base_url = model.get("base_url") or provider_config["base_url"]
-        
+
+        # Validation SSRF
+        if not _validate_url(base_url):
+            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
+
         async with httpx.AsyncClient(timeout=self.timeout * 2) as client:
             response = await client.post(
                 f"{base_url}/api/chat",
@@ -292,20 +334,26 @@ class ProviderManager:
     # =========================================================================
     
     async def _query_anthropic(
-        self, 
-        model: dict, 
-        provider_config: dict, 
-        prompt: str, 
+        self,
+        model: dict,
+        provider_config: dict,
+        prompt: str,
         max_tokens: int
     ) -> dict:
         """Handler for Anthropic API (non-OpenAI format)."""
         api_key = self.api_keys.get("anthropic")
         if not api_key:
             return {"error": "Anthropic API key not found"}
-        
+
+        base_url = provider_config["base_url"]
+
+        # Validation SSRF
+        if not _validate_url(base_url):
+            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                f"{provider_config['base_url']}/messages",
+                f"{base_url}/messages",
                 headers={
                     "x-api-key": api_key,
                     "Content-Type": "application/json",
@@ -331,25 +379,34 @@ class ProviderManager:
     # =========================================================================
     
     async def _query_google(
-        self, 
-        model: dict, 
-        provider_config: dict, 
-        prompt: str, 
+        self,
+        model: dict,
+        provider_config: dict,
+        prompt: str,
         max_tokens: int
     ) -> dict:
         """Handler for Google Gemini API (non-OpenAI format)."""
         api_key = self.api_keys.get("google")
         if not api_key:
             return {"error": "Google API key not found"}
-        
+
+        base_url = provider_config["base_url"]
+
+        # Validation SSRF
+        if not _validate_url(base_url):
+            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
+
         model_id = model["model_id"]
-        url = f"{provider_config['base_url']}/models/{model_id}:generateContent"
-        
+        url = f"{base_url}/models/{model_id}:generateContent"
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 url,
-                params={"key": api_key},
-                headers={"Content-Type": "application/json"},
+                # Utiliser header au lieu de query param (évite fuite dans les logs)
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key,
+                },
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {

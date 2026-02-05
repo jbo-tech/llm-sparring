@@ -49,6 +49,36 @@ budget_manager: BudgetManager | None = None
 
 # Limits
 MAX_PROMPT_CHARS = 50000
+RATE_LIMIT_REQUESTS = 30  # Max requêtes par fenêtre
+RATE_LIMIT_WINDOW = 60  # Fenêtre en secondes
+
+
+class RateLimiter:
+    """Rate limiter simple avec fenêtre glissante."""
+
+    def __init__(self, max_requests: int, window_seconds: int):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests: list[float] = []
+
+    def check(self) -> tuple[bool, str | None]:
+        """Vérifie si la requête est autorisée. Retourne (allowed, reason)."""
+        import time
+        now = time.time()
+        # Nettoyer les requêtes hors fenêtre
+        self.requests = [t for t in self.requests if now - t < self.window]
+        if len(self.requests) >= self.max_requests:
+            return False, f"Rate limit: {self.max_requests} requêtes/{self.window}s"
+        return True, None
+
+    def record(self):
+        """Enregistre une requête."""
+        import time
+        self.requests.append(time.time())
+
+
+# Rate limiter global
+rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -282,7 +312,15 @@ The target can be a model response OR file content — just pass the content and
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls."""
-    
+
+    # Rate limiting pour les outils qui font des requêtes externes
+    tools_with_requests = {"ask_model", "ask_all", "challenge"}
+    if name in tools_with_requests:
+        allowed, reason = rate_limiter.check()
+        if not allowed:
+            return [TextContent(type="text", text=json.dumps({"error": reason}))]
+        rate_limiter.record()
+
     try:
         if name == "ask_model":
             result = await handle_ask_model(arguments)
