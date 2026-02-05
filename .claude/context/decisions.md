@@ -19,3 +19,21 @@ Technical decisions and their context. Added via `/retro`.
 **Context**: Querying multiple LLMs costs money. Budget awareness forces asking the right questions.
 **Alternatives considered**: External budget tracking, no tracking
 **Date**: 2025-01-29
+
+### Lens validation: warn, don't refuse
+**Decision**: Invalid lens triggers warning but still executes (natural critique)
+**Context**: The goal is to challenge ideas. Even with wrong lens, the critique has value.
+**Alternatives considered**: Reject request, silent fallback to default lens
+**Date**: 2026-01-31
+
+### URL allowlist for SSRF protection
+**Decision**: Validate all `base_url` against ALLOWED_HOSTS before making requests
+**Context**: Custom URLs in config could enable SSRF attacks (internal network scanning, credential exfiltration to rogue servers). Even for local-only usage, defense in depth matters.
+**Alternatives considered**: No validation (trust config), regex patterns, blocklist approach
+**Date**: 2026-02-05
+
+### Rate limiting at tool level
+**Decision**: Add sliding window rate limiter (30 req/60s) for tools making external requests
+**Context**: Prevents runaway loops or abuse. Budget limits cost but not request volume. Rate limiting is orthogonal protection.
+**Alternatives considered**: No rate limiting, per-provider limits, token bucket algorithm
+**Date**: 2026-02-05

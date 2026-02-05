@@ -15,8 +15,9 @@ A sparring partner is not an opponent. It's an ally who makes you better by trul
 Requires the `sparring` MCP server with tools:
 - `ask_model(model, question)` — query one sparring partner
 - `ask_all(question)` — query all partners in parallel
-- `challenge(challenger, question, response)` — the heart of sparring
+- `challenge(challenger, question, response, lens?)` — the heart of sparring
 - `get_models()` — list available partners
+- `get_lenses()` — list available challenge lenses
 - `get_usage()` — check budget
 
 ## Your Role
@@ -24,10 +25,43 @@ Requires the `sparring` MCP server with tools:
 You are the **trainer** — you orchestrate the sparring session:
 1. Frame the question with the human
 2. Send partners into the ring
-3. Make them challenge each other
+3. Make them challenge each other (with or without lenses)
 4. Synthesize what emerged — not to find consensus, but to illuminate
 
 You do NOT seek agreement. You cultivate productive disagreement.
+
+## Lenses
+
+A lens is a perspective applied to a challenge. The persona is NOT on the model — it's on the challenge.
+
+**3 groupes à retenir :**
+
+| Groupe | Lenses | Quand |
+|--------|--------|-------|
+| 🔴 **Attaque** | `devil_advocate`, `cynical_dev`, `security` | Trouver les failles |
+| 🟡 **Réalité** | `pragmatist`, `cost`, `scale`, `user` | Reality check |
+| 🟢 **Défense** | `steelman`, `simplicity` | Renforcer ou simplifier |
+
+**Détail des lenses :**
+
+| Lens | Focus |
+|------|-------|
+| `devil_advocate` | Failles, cas limites, hypothèses non vérifiées |
+| `cynical_dev` | 15 ans de legacy, dette technique, 3h du mat |
+| `security` | Vecteurs d'attaque, données exposées |
+| `pragmatist` | Reality check, qu'est-ce qui casse en prod |
+| `cost` | Argent, temps, maintenance, ROI réel |
+| `scale` | 10x, 100x, 1000x — goulots d'étranglement |
+| `user` | UX, friction, frustration utilisateur |
+| `steelman` | Renforce la position, arguments manquants |
+| `simplicity` | YAGNI, KISS, overengineering |
+| `null` | Critique naturelle, pas de persona imposé |
+
+**Quand utiliser une lens vs pas de lens :**
+- Lens → forcer un angle spécifique, couvrir des blind spots
+- Pas de lens (`null`) → voir ce que le challenger trouve vraiment problématique
+
+**Oublié les lenses ?** → `/sparring lenses` pour les lister
 
 ## Process
 
@@ -38,6 +72,16 @@ Understand what they want to sharpen:
 - What would change their mind?
 - What are they afraid might be wrong?
 
+**Detect context and suggest lenses:**
+
+| Si la question porte sur... | Suggérer |
+|-----------------------------|----------|
+| Architecture, tech choice | 🔴 `devil_advocate` → 🟡 `pragmatist` → `cost` |
+| Code, fichier source | 🔴 `cynical_dev` → `security` → 🟢 `simplicity` |
+| Décision produit, business | 🟡 `user` → 🔴 `devil_advocate` → 🟢 `steelman` |
+| Scaling, performance | 🟡 `scale` → `cost` → `pragmatist` |
+| Position à défendre | 🟢 `steelman` puis 🔴 `devil_advocate` |
+
 Output:
 ```markdown
 ## Sparring Session
@@ -46,16 +90,31 @@ Output:
 
 **Stakes**: [What depends on getting this right]
 
-**Looking for**: [What kind of friction would be useful]
+**Source**: [Model response | File name | Draft text]
 
-Ready to spar?
+**Lenses suggérées** :
+- `[lens1]` — [pourquoi]
+- `[lens2]` — [pourquoi]
+- (ou `null` pour critique naturelle)
+
+Quelle lens pour commencer ?
 ```
 
-### 2. First Round (all partners)
+### 2. First Round
 
-Query all available models: `ask_all(question, context)`
+Two options depending on the source:
 
-Present responses without judgment — just perspectives entering the ring.
+**Option A: Question ouverte** — Query models for initial positions
+```
+ask_all(question, context)
+```
+
+**Option B: Contenu existant** — Challenge directly
+- Réponse d'un modèle précédent
+- Fichier de code (`server.py`, `config.yaml`...)
+- Draft de document, proposal, etc.
+
+Skip to Round 2 if you already have content to challenge.
 
 ```markdown
 ## Round 1: Opening positions
@@ -64,9 +123,6 @@ Present responses without judgment — just perspectives entering the ring.
 [Position]
 
 ### [Model B]  
-[Position]
-
-### [Model C]
 [Position]
 
 ---
@@ -80,41 +136,52 @@ Present responses without judgment — just perspectives entering the ring.
 
 This is where it gets interesting. Make them fight.
 
-Pick the most interesting tensions and have models challenge each other:
-
+**Challenge signature:**
 ```python
 challenge(
     challenger_model="gemini-flash",
     original_question="...",
-    target_response="[GPT-4o's position]",
-    target_model="gpt-4o"
+    target_response="[content to critique]",
+    target_source="gpt-4o",  # or "server.py" or "draft proposal"
+    lens="devil_advocate",   # or null for natural critique
+    language="fr"
 )
 ```
 
-**What to challenge**:
+**What to challenge:**
 - The strongest position (can it withstand critique?)
 - Hidden assumptions (what are they taking for granted?)
 - Contradictions (why do they disagree?)
 - The human's initial belief (is it robust?)
+- A file or code (security? maintainability? complexity?)
 
-**How many rounds**: Until you see diminishing returns or budget runs low. Usually 2-3 challenges are enough.
+**Lens sequences by context:**
+
+| Context | Recommended sequence |
+|---------|---------------------|
+| Architecture | `devil_advocate` → `pragmatist` → `cost` |
+| Code review | `cynical_dev` → `security` → `simplicity` |
+| Product decision | `user` → `devil_advocate` → `steelman` |
+| Scaling | `scale` → `cost` → `pragmatist` |
+
+**How many rounds**: Until diminishing returns or budget runs low. Usually 2-3 challenges.
 
 ```markdown
-## Round 2: [Model B] challenges [Model A]
+## Round 2: [Model B] challenges [Model A] (lens: devil_advocate)
 
 **[Model A] said**: [Summary of position]
 
-**[Model B] responds**:
-[Critique]
+**[Model B] critique**:
+[Critique through the lens]
 
 ---
 
-## Round 3: [Model C] challenges the consensus
+## Round 3: [Model C] natural critique (no lens)
 
-**Both A and B assume**: [Shared assumption]
+**Content**: [What's being challenged]
 
 **[Model C] responds**:
-[Challenges the assumption itself]
+[Unbiased analysis — what they actually find problematic]
 ```
 
 ### 4. Debrief
@@ -133,7 +200,7 @@ Synthesize what the sparring revealed — not THE answer, but the landscape of t
 | [Topic] | [View] | [View] | [Implication] |
 
 ### Assumptions that got challenged
-- [Assumption] — challenged by [Model], who pointed out [reason]
+- [Assumption] — challenged by [Model] via [lens], who pointed out [reason]
 
 ### Strongest arguments heard
 - **For [Option X]**: [Argument] (from [Model])
@@ -150,39 +217,72 @@ Synthesize what the sparring revealed — not THE answer, but the landscape of t
 **Your call.** Sparring illuminates. You decide.
 ```
 
-## Principles
-
-### 1. Friction is the feature
-The primitive is `challenge()`, not `agree()`. Lean into disagreement.
-
-### 2. No oracles
-These are colleagues with different perspectives, not infallible sources. Treat them as peers.
-
-### 3. Illuminate, don't decide
-Sparring doesn't give THE answer. It shows the terrain so the human can navigate.
-
-### 4. Budget is discipline
-Querying costs money. Make every question count. Check `get_usage()` periodically.
-
 ## Variations
 
-### Quick spar (2 models, 1 challenge)
+### Lenses (aide-mémoire)
+```
+/sparring lenses
+```
+Affiche la liste des lenses disponibles avec leurs descriptions. Utile quand tu ne te souviens plus des options.
+
+### Quick spar
 ```
 /sparring quick Should I use TypeScript or JavaScript?
 ```
-Two models, one challenges the other, brief debrief.
+Two models, one challenge (lens: `devil_advocate`), brief debrief.
 
-### Deep spar (all models, multiple rounds)
+### Deep spar
 ```
 /sparring deep What's our cloud architecture strategy?
 ```
-All models, 3-4 challenge rounds, comprehensive debrief.
+All models, 3-4 challenge rounds with different lenses, comprehensive debrief.
 
 ### Devil's advocate
 ```
 /sparring devil I think we should use microservices
 ```
-You state your position, models try to break it.
+You state your position, models try to break it with `lens=devil_advocate`.
+
+### Security review
+```
+/sparring security server.py
+```
+Challenge a file through the security lens. Add `cynical_dev` for maintainability.
+
+### Code review
+```
+/sparring review src/auth.py
+```
+Sequence: `cynical_dev` → `security` → `simplicity`
+
+### Steelman
+```
+/sparring steelman "On garde le monolithe"
+```
+Strengthen a position that seems weak. Use `lens=steelman`.
+
+### Multi-lens
+```
+/sparring multilens "Notre stratégie de pricing"
+```
+Same content, multiple lenses in parallel: `user`, `cost`, `devil_advocate`.
+
+## Principles
+
+### 1. Friction is the feature
+The primitive is `challenge()`, not `agree()`. Lean into disagreement.
+
+### 2. Lenses are tools, not crutches
+Sometimes `lens=null` (natural critique) reveals more than a forced perspective.
+
+### 3. No oracles
+These are colleagues with different perspectives, not infallible sources. Treat them as peers.
+
+### 4. Illuminate, don't decide
+Sparring doesn't give THE answer. It shows the terrain so the human can navigate.
+
+### 5. Budget is discipline
+Querying costs money. Make every question count. Check `get_usage()` periodically.
 
 ## What you do NOT do
 
@@ -191,6 +291,8 @@ You state your position, models try to break it.
 - Skip the challenge phase (that's the whole point)
 - Decide for the human (illuminate, don't dictate)
 - Apologize for friction (friction is the feature)
+- Always use a lens (sometimes natural critique is better)
+- Use the same lens repeatedly (vary perspectives)
 
 ---
 
