@@ -27,17 +27,17 @@ cp -r . ~/.claude/mcp/llm-sparring/
 
 ```bash
 cd ~/.claude/mcp/llm-sparring
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-# Or with uv:
-# uv pip install -r requirements.txt
 ```
 
 ### 3. Configure models
 
 ```bash
-mkdir -p ~/.config/sparring
-cp config.yaml ~/.config/sparring/config.yaml
-nano ~/.config/sparring/config.yaml
+mkdir -p ~/.config/mcp/llm-sparring
+cp config.yaml ~/.config/mcp/llm-sparring/config.yaml
+nano ~/.config/mcp/llm-sparring/config.yaml
 ```
 
 ### 4. Set API keys
@@ -70,7 +70,7 @@ export XAI_API_KEY="..."
 {
   "mcpServers": {
     "sparring": {
-      "command": "python",
+      "command": "/Users/YOU/.claude/mcp/llm-sparring/.venv/bin/python",
       "args": ["/Users/YOU/.claude/mcp/llm-sparring/server.py"],
       "env": {
         "OPENAI_API_KEY": "sk-...",
@@ -85,7 +85,7 @@ export XAI_API_KEY="..."
 **For Claude Code CLI**:
 
 ```bash
-claude mcp add sparring python ~/.claude/mcp/llm-sparring/server.py
+claude mcp add sparring ~/.claude/mcp/llm-sparring/.venv/bin/python ~/.claude/mcp/llm-sparring/server.py
 ```
 
 ## Tools
@@ -225,7 +225,7 @@ budget:
   confirm_threshold: 0.10  # Confirm if request > $0.10
   session_limit: 1.00      # Max per session
   daily_limit: 5.00        # Max per day
-  tracking_file: "~/.config/sparring/usage.json"
+  tracking_file: "~/.config/mcp/llm-sparring/usage.json"
 ```
 
 ## Usage with /sparring
@@ -242,12 +242,82 @@ This MCP is designed to work with a `/sparring` command in Claude Code:
   4. Synthesis and recommendation
 ```
 
+## Testing
+
+### 1. Verify the server starts
+
+```bash
+cd ~/.claude/mcp/llm-sparring
+source .venv/bin/activate
+python server.py
+# Ctrl+C to stop
+```
+
+In debug mode for more details:
+
+```bash
+LOG_LEVEL=DEBUG python server.py
+```
+
+### 2. Check model configuration
+
+In Claude Code, run:
+
+```
+get_models()
+```
+
+Verify that your enabled models appear with `status: "available"`.
+
+### 3. Test a single model
+
+```
+ask_model(model: "gpt-4o", question: "Say hello in one word")
+```
+
+Start with a cheap/fast model (e.g. `gpt-4o-mini`, `gemini-flash`, or a local Ollama model).
+
+### 4. Test parallel queries
+
+```
+ask_all(question: "What is 2+2?")
+```
+
+All enabled models should respond.
+
+### 5. Test challenge
+
+```
+challenge(
+  challenger_model: "gemini-flash",
+  original_question: "What is the best programming language?",
+  target_response: "Python because it's simple",
+  target_model: "gpt-4o"
+)
+```
+
+### 6. Check budget tracking
+
+```
+get_usage()
+```
+
+Verify that session and daily costs reflect your test queries.
+
+### 7. Test with /sparring
+
+```
+/sparring Should I use SQLite or PostgreSQL for a side project?
+```
+
+This runs the full orchestration flow (framing, ask_all, challenge, synthesis).
+
 ## Troubleshooting
 
 ### "No models available"
 
 - Check API keys: `echo $OPENAI_API_KEY`
-- Check config: `cat ~/.config/sparring/config.yaml`
+- Check config: `cat ~/.config/mcp/llm-sparring/config.yaml`
 - At least one model must be `enabled: true`
 
 ### "Timeout querying model"

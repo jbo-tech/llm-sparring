@@ -94,7 +94,7 @@ def _ensure_initialized():
 
 def get_config_path() -> Path:
     """Get config file path."""
-    config_dir = Path(os.environ.get("SPARRING_CONFIG_DIR", "~/.config/sparring")).expanduser()
+    config_dir = Path(os.environ.get("SPARRING_CONFIG_DIR", "~/.config/mcp/llm-sparring")).expanduser()
     return config_dir / "config.yaml"
 
 
@@ -144,7 +144,7 @@ def get_default_config() -> dict:
             "confirm_threshold": 0.10,
             "session_limit": 1.00,
             "daily_limit": 5.00,
-            "tracking_file": "~/.config/sparring/usage.json",
+            "tracking_file": "~/.config/mcp/llm-sparring/usage.json",
         },
     }
 

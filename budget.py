@@ -73,7 +73,7 @@ class BudgetManager:
         self.daily_limit = config.get("daily_limit", 5.00)
         
         # Tracking file
-        tracking_path = config.get("tracking_file", "~/.config/sparring/usage.json")
+        tracking_path = config.get("tracking_file", "~/.config/mcp/llm-sparring/usage.json")
         self.tracking_file = Path(tracking_path).expanduser()
         
         # Custom pricing overrides

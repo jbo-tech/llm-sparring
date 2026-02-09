@@ -16,7 +16,7 @@ pip install -r requirements.txt     # Install deps
 - MCP SDK (mcp)
 - httpx for async HTTP
 - pydantic for config validation
-- YAML config (~/.config/sparring/config.yaml)
+- YAML config (~/.config/mcp/llm-sparring/config.yaml)
 
 ## Conventions
 

@@ -1,6 +1,6 @@
 # Sparring Configuration
 # Make your LLMs disagree.
-# Copy to ~/.config/sparring/config.yaml
+# Copy to ~/.config/mcp/llm-sparring/config.yaml
 
 # =============================================================================
 # Models Configuration
@@ -200,7 +200,7 @@ budget:
   daily_limit: 5.00  # $5.00
   
   # File to track usage (created automatically)
-  tracking_file: "~/.config/sparring/usage.json"
+  tracking_file: "~/.config/mcp/llm-sparring/usage.json"
 
 
 # =============================================================================
