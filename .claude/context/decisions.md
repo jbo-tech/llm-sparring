@@ -37,3 +37,15 @@ Technical decisions and their context. Added via `/retro`.
 **Context**: Prevents runaway loops or abuse. Budget limits cost but not request volume. Rate limiting is orthogonal protection.
 **Alternatives considered**: No rate limiting, per-provider limits, token bucket algorithm
 **Date**: 2026-02-05
+
+### Config path: ~/.config/mcp/llm-sparring
+**Decision**: Move config from `~/.config/sparring` to `~/.config/mcp/llm-sparring`
+**Context**: Groups all MCP server configs under `~/.config/mcp/`, making it scalable if more MCP servers are added. Follows XDG convention more consistently.
+**Alternatives considered**: Keep `~/.config/sparring` (simpler but isolated), `~/.config/llm-sparring` (no MCP grouping)
+**Date**: 2026-02-08
+
+### Dedicated venv for MCP server
+**Decision**: Use a `.venv` inside the MCP server directory, referenced directly in Claude Desktop/CLI config
+**Context**: Isolates MCP dependencies from global Python. The `.gitignore` already had `.venv/` listed. Claude Desktop `command` and CLI `mcp add` point to `.venv/bin/python` to avoid activation issues.
+**Alternatives considered**: Global pip install, uv, system package manager
+**Date**: 2026-02-08

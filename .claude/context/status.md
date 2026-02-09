@@ -4,9 +4,17 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Security audit complete. Fixes applied. Ready for commit and testing.
+Ready for first real test. All code, config, and docs are in place.
 
 ## Log
+
+### 2026-02-08
+- Done: Migrated config path from `~/.config/sparring` to `~/.config/mcp/llm-sparring`
+- Done: Added virtual environment setup (`.venv`) in installation steps
+- Done: Added step-by-step Testing section to README (7 steps)
+- Done: Updated all references across server.py, budget.py, config.yaml, CLAUDE.md, README.md
+- Commit: `7043bbf`
+- Next: Follow Testing section — create venv, install deps, configure models, run server
 
 ### 2026-02-05
 - Done: Security audit based on WorkOS MCP best practices article
