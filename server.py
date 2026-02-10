@@ -383,6 +383,7 @@ async def handle_ask_model(args: dict) -> dict:
     response = await provider_manager.query(model_name, prompt, max_tokens)
     
     # Track usage
+    actual_cost = 0
     if "error" not in response:
         actual_cost = budget_manager.estimate_request_cost(
             model_name,
@@ -390,15 +391,16 @@ async def handle_ask_model(args: dict) -> dict:
             response.get("output_tokens", max_tokens)
         )
         budget_manager.record_usage(actual_cost)
-    
+
     return {
+        "summary": f"[{model_name} | ${actual_cost:.4f}]",
         "model": model_name,
         "response": response.get("content", response.get("error", "No response")),
         "tokens": {
             "input": response.get("input_tokens"),
             "output": response.get("output_tokens"),
         },
-        "cost": response.get("cost"),
+        "cost": actual_cost,
     }
 
 
@@ -473,6 +475,7 @@ async def handle_ask_all(args: dict) -> dict:
         budget_manager.record_usage(total_cost)
     
     return {
+        "summary": f"[{len(available_models)} models | ${total_cost:.4f}]",
         "responses": responses,
         "total_cost": total_cost,
         "models_queried": len(available_models),
@@ -503,8 +506,8 @@ async def handle_challenge(args: dict) -> dict:
             language=language,
         )
         prompt = prompt.replace(
-            "## Réponse à challenger",
-            f"## Réponse à challenger (source: {target_source})"
+            "## Response to challenge",
+            f"## Response to challenge (source: {target_source})"
         )
     else:
         # Natural critique without lens
@@ -547,27 +550,25 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
     response = await provider_manager.query(challenger, prompt, 1500)
     
     # Track usage
+    actual_cost = 0
     if "error" not in response:
-        cost = budget_manager.estimate_request_cost(
+        actual_cost = budget_manager.estimate_request_cost(
             challenger,
             response.get("input_tokens", 800),
             response.get("output_tokens", 1500)
         )
-        budget_manager.record_usage(cost)
-    
+        budget_manager.record_usage(actual_cost)
+
+    lens_label = lens or "natural"
     result = {
+        "summary": f"[{challenger} | {lens_label} | ${actual_cost:.4f}]",
         "challenger": challenger,
         "target_source": target_source,
+        "lens": lens,
+        "lens_description": LENSES[lens]["description"] if lens else "Natural critique (no lens)",
         "critique": response.get("content", response.get("error", "No response")),
+        "cost": actual_cost,
     }
-    
-    # Include lens info
-    if lens is not None:
-        result["lens"] = lens
-        result["lens_description"] = LENSES[lens]["description"]
-    else:
-        result["lens"] = None
-        result["lens_description"] = "Natural critique (no lens)"
 
     if lens_warning:
         result["warning"] = lens_warning

@@ -4,9 +4,19 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Ready for first real test. All code, config, and docs are in place.
+Lenses and response UX improvements done. Ready for testing.
 
 ## Log
+
+### 2026-02-10
+- Done: Added `naive` lens — questions fundamentals, jargon, implicit assumptions
+- Done: Converted all lens definitions (system/focus) from French to English
+- Done: Converted prompt builder template (headers, instructions) to English
+- Done: Added `summary` field to all tool responses (`ask_model`, `ask_all`, `challenge`)
+  - Format: `[model | $cost]`, `[N models | $cost]`, `[model | lens | $cost]`
+- Done: Fixed `prompt.replace` in `handle_challenge` to match new English header
+- Done: Updated `.claude/context/lenses.md` with naive lens, kickoff sequence, example
+- Next: Test with real providers, commit changes
 
 ### 2026-02-08
 - Done: Migrated config path from `~/.config/sparring` to `~/.config/mcp/llm-sparring`

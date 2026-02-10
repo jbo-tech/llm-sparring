@@ -49,3 +49,15 @@ Technical decisions and their context. Added via `/retro`.
 **Context**: Isolates MCP dependencies from global Python. The `.gitignore` already had `.venv/` listed. Claude Desktop `command` and CLI `mcp add` point to `.venv/bin/python` to avoid activation issues.
 **Alternatives considered**: Global pip install, uv, system package manager
 **Date**: 2026-02-08
+
+### Lens definitions in English
+**Decision**: Write all lens system prompts and focus instructions in English, even though response language is configurable (fr/en)
+**Context**: Lens config is code-level instructions to LLMs. English is more universal and avoids mixing config language with output language. The `language` parameter controls the response language independently.
+**Alternatives considered**: Keep in French (original), make configurable per-lens
+**Date**: 2026-02-10
+
+### Summary field in tool responses
+**Decision**: Add a compact `summary` field as first key in all tool response dicts
+**Context**: Gives at-a-glance metadata (model, lens, cost) without parsing the full JSON. Format: `[model | $cost]` for ask, `[model | lens | $cost]` for challenge. Being first in dict means it's immediately visible in output.
+**Alternatives considered**: Prepend to response text (pollutes content), separate metadata endpoint (extra call)
+**Date**: 2026-02-10

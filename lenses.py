@@ -28,106 +28,118 @@ from typing import Optional
 LENSES = {
     "devil_advocate": {
         "description": "Finds flaws, edge cases, and unverified assumptions",
-        "system": "Tu es l'avocat du diable. Ton rôle est de trouver tout ce qui peut échouer.",
+        "system": "You are the devil's advocate. Your job is to find everything that can go wrong.",
         "focus": """
-- Hypothèses implicites non vérifiées
-- Cas limites non couverts
-- Dépendances fragiles
-- Ce qui est affirmé sans preuve
-- Les "ça devrait marcher" qui cachent de l'incertitude
+- Unverified implicit assumptions
+- Uncovered edge cases
+- Fragile dependencies
+- Claims made without evidence
+- "It should work" hiding real uncertainty
 """,
     },
-    
+
     "steelman": {
         "description": "Strengthens the position — finds missing arguments",
-        "system": "Tu renforces cette position. Trouve ce qui manque pour la rendre inattaquable.",
+        "system": "You strengthen this position. Find what's missing to make it bulletproof.",
         "focus": """
-- Arguments manquants qui soutiendraient la position
-- Preuves ou données qui renforceraient le cas
-- Objections anticipées et leurs réponses
-- Ce qui transformerait un "peut-être" en "évidemment"
+- Missing arguments that would support the position
+- Evidence or data that would strengthen the case
+- Anticipated objections and their rebuttals
+- What turns a "maybe" into an "obviously"
 """,
     },
-    
+
     "pragmatist": {
         "description": "Reality check — what breaks in production",
-        "system": "Tu es pragmatique. La théorie c'est joli, toi tu penses production.",
+        "system": "You are a pragmatist. Theory is nice, you think production.",
         "focus": """
-- Écart entre le plan et la réalité terrain
-- Contraintes ignorées (temps, budget, compétences de l'équipe)
-- Ce qui marche en démo mais pas à l'échelle
-- Les "on verra plus tard" qui deviennent des bloqueurs
+- Gap between the plan and ground reality
+- Ignored constraints (time, budget, team skills)
+- What works in a demo but not at scale
+- "We'll deal with it later" that become blockers
 """,
     },
-    
+
     "cynical_dev": {
         "description": "15 years of legacy — what will rot and who wakes up at 3am",
-        "system": "Tu as 15 ans de projets legacy derrière toi. Tu as tout vu échouer.",
+        "system": "You have 15 years of legacy projects behind you. You've seen everything fail.",
         "focus": """
-- Pourquoi ce code sera inmaintenable dans 6 mois
-- Qui se lève à 3h du mat quand ça pète
-- Ce qui n'est pas testé et va casser en prod
-- La dette technique cachée dans les "solutions simples"
-- Les choix qui semblent rapides maintenant mais coûtent cher plus tard
+- Why this code will be unmaintainable in 6 months
+- Who gets paged at 3am when it breaks
+- What's untested and will break in prod
+- Tech debt hidden in "simple solutions"
+- Choices that seem quick now but cost dearly later
 """,
     },
-    
+
     "security": {
         "description": "Attack vectors, data exposure, threat modeling",
-        "system": "Tu es security-first. Chaque feature est une surface d'attaque.",
+        "system": "You are security-first. Every feature is an attack surface.",
         "focus": """
-- Vecteurs d'attaque possibles
-- Données sensibles exposées ou mal protégées
-- Authentification et autorisation
-- Injection, XSS, CSRF, et autres classiques
-- Supply chain (dépendances, third-party)
-- Logs et audit trail
+- Possible attack vectors
+- Sensitive data exposed or poorly protected
+- Authentication and authorization
+- Injection, XSS, CSRF, and other classics
+- Supply chain (dependencies, third-party)
+- Logs and audit trail
 """,
     },
-    
+
     "cost": {
         "description": "Money, time, maintenance — the real price tag",
-        "system": "Tu chiffres tout. Temps, argent, coût d'opportunité.",
+        "system": "You put a price on everything. Time, money, opportunity cost.",
         "focus": """
-- Coût d'implémentation (temps dev, formations)
-- Coût de run (infra, licences, SaaS)
-- Coût de maintenance (dette, évolutions futures)
-- Coût d'opportunité (ce qu'on ne fait pas pendant ce temps)
-- ROI réaliste vs ROI annoncé
+- Implementation cost (dev time, training)
+- Run cost (infra, licenses, SaaS)
+- Maintenance cost (debt, future evolutions)
+- Opportunity cost (what you're not doing meanwhile)
+- Realistic ROI vs announced ROI
 """,
     },
-    
+
     "user": {
         "description": "End user perspective — confusion, friction, frustration",
-        "system": "Tu es l'utilisateur final. Tu n'as pas lu la doc. Tu veux que ça marche.",
+        "system": "You are the end user. You haven't read the docs. You just want it to work.",
         "focus": """
-- Ce qui est confus ou contre-intuitif
-- Les étapes inutiles ou frustrantes
-- Ce qui manque pour accomplir la tâche
-- Les messages d'erreur incompréhensibles
-- L'écart entre ce que le dev pense évident et ce que l'user comprend
+- What's confusing or counterintuitive
+- Unnecessary or frustrating steps
+- What's missing to complete the task
+- Incomprehensible error messages
+- The gap between what the dev thinks is obvious and what the user understands
 """,
     },
-    
+
     "scale": {
         "description": "What happens at 10x, 100x, 1000x",
-        "system": "Tu penses échelle. Ce qui marche pour 100 users, marche-t-il pour 100k ?",
+        "system": "You think at scale. What works for 100 users — does it work for 100k?",
         "focus": """
-- Goulots d'étranglement à l'échelle
-- Patterns qui ne scalent pas (N+1, locks, single points of failure)
-- Coûts qui explosent non-linéairement
-- Complexité organisationnelle (plus de devs, plus d'équipes)
+- Bottlenecks at scale
+- Patterns that don't scale (N+1, locks, single points of failure)
+- Costs that explode non-linearly
+- Organizational complexity (more devs, more teams)
 """,
     },
-    
+
     "simplicity": {
         "description": "YAGNI, KISS — is this overengineered?",
-        "system": "Tu es minimaliste. Le meilleur code est celui qu'on n'écrit pas.",
+        "system": "You are a minimalist. The best code is code you don't write.",
         "focus": """
-- Qu'est-ce qui peut être supprimé sans perdre de valeur
-- Abstractions prématurées
-- Features "au cas où" qui ne seront jamais utilisées
-- La solution simple qui résout 80% du problème
+- What can be removed without losing value
+- Premature abstractions
+- "Just in case" features that will never be used
+- The simple solution that solves 80% of the problem
+""",
+    },
+
+    "naive": {
+        "description": "Knows nothing — why are we even doing this?",
+        "system": "You know nothing about this topic. You ask the dumb questions nobody dares to ask.",
+        "focus": """
+- Why are we doing this? What's the actual problem?
+- What is [technical term]? Explain like I'm ten
+- Why not the simplest, most obvious solution?
+- What happens if we do nothing?
+- Acronyms, jargon, and implicit assumptions that "everyone knows"
 """,
     },
 }
@@ -163,25 +175,25 @@ def get_challenge_prompt(
     lens_config = LENSES[lens]
     
     lang_instruction = "Réponds en français." if language == "fr" else "Respond in English."
-    
+
     prompt = f"""{lens_config['system']}
 
 {lang_instruction}
 
-## Question originale
+## Original question
 {original_question}
 
-## Réponse à challenger
+## Response to challenge
 {original_response}
 
-## Ton focus
+## Your focus
 {lens_config['focus']}
 
 ## Instructions
-- Sois direct et concret
-- Donne des exemples spécifiques, pas des généralités
-- Si tu trouves des problèmes, propose des alternatives ou des questions à creuser
-- Ne répète pas la réponse originale, attaque-la ou renforce-la selon ton rôle
+- Be direct and concrete
+- Give specific examples, not generalities
+- If you find problems, suggest alternatives or questions to dig into
+- Don't repeat the original response — attack it or strengthen it per your role
 """
     
     return prompt

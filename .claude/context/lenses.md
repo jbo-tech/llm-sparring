@@ -38,15 +38,16 @@ Claude Code lit le fichier et passe le contenu. Le MCP reste stateless.
 
 | Lens | Usage | Question clé |
 |------|-------|--------------|
-| `devil_advocate` | Défaut. Trouve les failles | "Qu'est-ce qui peut échouer ?" |
-| `steelman` | Renforce la position | "Qu'est-ce qui manque pour convaincre ?" |
-| `pragmatist` | Reality check | "Ça marche en prod ?" |
-| `cynical_dev` | 15 ans de legacy | "Qui debug à 3h du mat ?" |
-| `security` | Threat modeling | "Comment on attaque ça ?" |
-| `cost` | Chiffrage réel | "Combien ça coûte vraiment ?" |
-| `user` | UX/friction | "L'utilisateur comprend ?" |
-| `scale` | 10x, 100x, 1000x | "Ça tient à l'échelle ?" |
-| `simplicity` | YAGNI/KISS | "C'est overengineered ?" |
+| `devil_advocate` | Défaut. Trouve les failles | "What can go wrong?" |
+| `steelman` | Renforce la position | "What's missing to convince?" |
+| `pragmatist` | Reality check | "Does it work in prod?" |
+| `cynical_dev` | 15 ans de legacy | "Who gets paged at 3am?" |
+| `security` | Threat modeling | "How do we attack this?" |
+| `cost` | Chiffrage réel | "What does it really cost?" |
+| `user` | UX/friction | "Does the user understand?" |
+| `scale` | 10x, 100x, 1000x | "Does it hold at scale?" |
+| `simplicity` | YAGNI/KISS | "Is this overengineered?" |
+| `naive` | Regard neuf, questions bêtes | "Why are we even doing this?" |
 
 ## Séquences recommandées
 
@@ -78,6 +79,13 @@ Claude Code lit le fichier et passe le contenu. Le MCP reste stateless.
 1. scale → goulots d'étranglement
 2. cost → coûts non-linéaires
 3. pragmatist → contraintes réelles
+```
+
+### Kickoff / Cadrage
+```
+1. naive → questionner les fondamentaux
+2. devil_advocate → trouver les failles
+3. pragmatist → reality check
 ```
 
 ## Anti-patterns
@@ -116,6 +124,13 @@ Question: "Notre stratégie de migration cloud"
 Response: [réponse de GPT-4o]
 Challenger: gemini-flash
 Lens: null  ← critique naturelle, pas de persona
+```
+
+### Questionner les fondamentaux d'un projet
+```
+/sparring
+Question: "On construit un moteur de recommandation ML pour le e-commerce"
+Lens: naive
 ```
 
 ### Valider une feature
