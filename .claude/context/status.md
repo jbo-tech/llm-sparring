@@ -4,9 +4,19 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Lenses and response UX improvements done. Ready for testing.
+Modernisation architecture faite (OpenAI-compat unifié + pricing vendored). Prêt pour tests live avec providers réels.
 
 ## Log
+
+### 2026-04-15
+- Done: Refactor `providers.py` — Anthropic et Google migrés sur endpoint OpenAI-compat (`api.anthropic.com/v1` et `generativelanguage.googleapis.com/v1beta/openai`). Handlers `_query_anthropic` et `_query_google` supprimés (~90 lignes). Seul Ollama conserve un handler dédié.
+- Done: Externalisation du pricing — `DEFAULT_PRICING` hardcodé remplacé par `pricing.json` vendored depuis LiteLLM (2659 entrées). Cascade de lookup : override → exact → `{provider}/{id}` → local → fallback.
+- Done: Script `scripts/refresh_pricing.py` pour refresh trimestriel manuel.
+- Done: `get_model_pricing` et `estimate_request_cost` reçoivent désormais `model_id`/`provider`/`base_url` pour la résolution fine.
+- Done: 2 entrées dans `decisions.md` (OpenAI-compat unifié avec tradeoff caching, pricing vendored).
+- Tradeoff acté: prompt caching Anthropic indisponible via endpoint OpenAI-compat.
+- Done: Refresh README — providers table (anthropic/google en OpenAI-compat), signature `challenge` (target_source/lens/language), ajout section `get_lenses`, section Pricing avec `pricing.json` et `refresh_pricing.py`, exemple `get_models` complet. Écarts doc pré-existants résorbés.
+- Next: Tester end-to-end avec clés API réelles (ask_model sur claude-haiku, gemini-flash, régression gpt-4o-mini). Commit.
 
 ### 2026-02-10
 - Done: Added `naive` lens — questions fundamentals, jargon, implicit assumptions

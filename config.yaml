@@ -6,20 +6,20 @@
 # Models Configuration
 # =============================================================================
 # 
-# Supported providers (OpenAI-compatible):
+# Supported providers (all OpenAI-compatible endpoints):
 #   - openai      → OPENAI_API_KEY
+#   - anthropic   → ANTHROPIC_API_KEY (OpenAI-compat endpoint, no prompt caching)
+#   - google      → GOOGLE_API_KEY (OpenAI-compat endpoint, beta)
 #   - openrouter  → OPENROUTER_API_KEY (recommended: 400+ models, 1 key)
 #   - mistral     → MISTRAL_API_KEY
 #   - deepseek    → DEEPSEEK_API_KEY
 #   - groq        → GROQ_API_KEY (fast inference)
 #   - together    → TOGETHER_API_KEY
 #   - xai         → XAI_API_KEY (Grok)
-#   - ollama      → No key needed (local)
-#
-# Other providers:
-#   - anthropic   → ANTHROPIC_API_KEY
-#   - google      → GOOGLE_API_KEY
 #   - custom      → Any OpenAI-compatible endpoint
+#
+# Local (no key):
+#   - ollama      → http://localhost:11434 (dedicated handler)
 
 models:
   # ===========================================================================
@@ -206,11 +206,11 @@ budget:
 # =============================================================================
 # Custom Pricing (optional)
 # =============================================================================
-# Override default pricing for specific models
-# Prices are per 1M tokens
+# Override pricing for specific models. Prix per 1M tokens.
 #
-# Default pricing is built into budget.py for common models.
-# Add custom pricing here for models not in the default list.
+# Le pricing par défaut vient de `pricing.json` (vendored depuis LiteLLM,
+# ~2600 modèles). Refresh : `python scripts/refresh_pricing.py`.
+# Utiliser cette section pour les modèles absents du JSON ou pour forcer un tarif.
 
 # pricing:
 #   my-custom-model:

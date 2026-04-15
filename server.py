@@ -358,6 +358,14 @@ async def handle_ask_model(args: dict) -> dict:
     context = args.get("context", "")
     max_tokens = args.get("max_tokens", 1000)
 
+    # Contexte pricing (model_id/provider/base_url) pour la cascade de lookup
+    model_cfg = provider_manager.models.get(model_name, {})
+    pricing_ctx = {
+        "model_id": model_cfg.get("model_id"),
+        "provider": model_cfg.get("provider"),
+        "base_url": model_cfg.get("base_url"),
+    }
+
     # Build prompt
     prompt = question
     if context:
@@ -368,7 +376,7 @@ async def handle_ask_model(args: dict) -> dict:
 
     # Check budget
     estimated_input = _estimate_tokens(prompt)
-    cost_estimate = budget_manager.estimate_request_cost(model_name, estimated_input, max_tokens)
+    cost_estimate = budget_manager.estimate_request_cost(model_name, estimated_input, max_tokens, **pricing_ctx)
     budget_check = budget_manager.check_budget(cost_estimate)
 
     if not budget_check["allowed"]:
@@ -381,14 +389,15 @@ async def handle_ask_model(args: dict) -> dict:
 
     # Query model
     response = await provider_manager.query(model_name, prompt, max_tokens)
-    
+
     # Track usage
     actual_cost = 0
     if "error" not in response:
         actual_cost = budget_manager.estimate_request_cost(
             model_name,
             response.get("input_tokens", 500),
-            response.get("output_tokens", max_tokens)
+            response.get("output_tokens", max_tokens),
+            **pricing_ctx,
         )
         budget_manager.record_usage(actual_cost)
 
@@ -427,10 +436,15 @@ async def handle_ask_all(args: dict) -> dict:
 
     # Estimate total cost
     estimated_input = _estimate_tokens(prompt)
-    total_estimate = sum(
-        budget_manager.estimate_request_cost(m, estimated_input, max_tokens)
-        for m in available_models
-    )
+    total_estimate = 0.0
+    for m in available_models:
+        cfg = provider_manager.models.get(m, {})
+        total_estimate += budget_manager.estimate_request_cost(
+            m, estimated_input, max_tokens,
+            model_id=cfg.get("model_id"),
+            provider=cfg.get("provider"),
+            base_url=cfg.get("base_url"),
+        )
 
     budget_check = budget_manager.check_budget(total_estimate)
     if not budget_check["allowed"]:
@@ -534,9 +548,17 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
     if len(prompt) > MAX_PROMPT_CHARS:
         return {"error": "Prompt too large", "chars": len(prompt), "limit": MAX_PROMPT_CHARS}
 
+    # Contexte pricing
+    challenger_cfg = provider_manager.models.get(challenger, {})
+    pricing_ctx = {
+        "model_id": challenger_cfg.get("model_id"),
+        "provider": challenger_cfg.get("provider"),
+        "base_url": challenger_cfg.get("base_url"),
+    }
+
     # Check budget
     estimated_input = _estimate_tokens(prompt)
-    cost_estimate = budget_manager.estimate_request_cost(challenger, estimated_input, 1500)
+    cost_estimate = budget_manager.estimate_request_cost(challenger, estimated_input, 1500, **pricing_ctx)
     budget_check = budget_manager.check_budget(cost_estimate)
 
     if not budget_check["allowed"]:
@@ -548,14 +570,15 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
 
     # Query challenger
     response = await provider_manager.query(challenger, prompt, 1500)
-    
+
     # Track usage
     actual_cost = 0
     if "error" not in response:
         actual_cost = budget_manager.estimate_request_cost(
             challenger,
             response.get("input_tokens", 800),
-            response.get("output_tokens", 1500)
+            response.get("output_tokens", 1500),
+            **pricing_ctx,
         )
         budget_manager.record_usage(actual_cost)
 
@@ -586,8 +609,13 @@ async def handle_get_models() -> dict:
     models = []
     for model in all_models:
         status = "available" if model["name"] in available_names else "unavailable"
-        pricing = budget_manager.get_model_pricing(model["name"])
-        
+        pricing = budget_manager.get_model_pricing(
+            model["name"],
+            model_id=model.get("model_id"),
+            provider=model.get("provider"),
+            base_url=model.get("base_url"),
+        )
+
         models.append({
             "name": model["name"],
             "provider": model["provider"],
@@ -624,9 +652,15 @@ async def handle_estimate_cost(args: dict) -> dict:
     
     estimates = {}
     total = 0
-    
+
     for model in models:
-        cost = budget_manager.estimate_request_cost(model, input_tokens, output_tokens)
+        cfg = provider_manager.models.get(model, {})
+        cost = budget_manager.estimate_request_cost(
+            model, input_tokens, output_tokens,
+            model_id=cfg.get("model_id"),
+            provider=cfg.get("provider"),
+            base_url=cfg.get("base_url"),
+        )
         estimates[model] = cost
         total += cost
     

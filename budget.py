@@ -5,6 +5,14 @@ Tracks usage and enforces limits:
 - Per-request confirmation threshold
 - Session limit
 - Daily limit
+
+Pricing source: pricing.json (vendored depuis LiteLLM, cf. scripts/refresh_pricing.py).
+Cascade de résolution dans get_model_pricing:
+  1. Override config.yaml (custom_pricing, per-1M-tokens)
+  2. pricing.json — lookup exact par model_id
+  3. pricing.json — lookup {provider}/{model_id}
+  4. Règle locale : provider=="ollama" ou base_url local → 0
+  5. Fallback avec warning : pricing conservateur
 """
 
 import json
@@ -14,54 +22,54 @@ import tempfile
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger("sparring.budget")
 
-# Pricing per 1M tokens (as of Jan 2025)
-# Format: {model_pattern: {"input": price, "output": price}}
-DEFAULT_PRICING = {
-    # OpenAI
-    "gpt-4o": {"input": 2.50, "output": 10.00},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gpt-4-turbo": {"input": 10.00, "output": 30.00},
-    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
-    
-    # Anthropic
-    "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
-    "claude-3-5-haiku": {"input": 0.80, "output": 4.00},
-    "claude-3-opus": {"input": 15.00, "output": 75.00},
-    
-    # Google Gemini
-    "gemini-2.0-flash": {"input": 0.075, "output": 0.30},
-    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
-    
-    # Mistral
-    "mistral-large": {"input": 2.00, "output": 6.00},
-    "mistral-small": {"input": 0.20, "output": 0.60},
-    "mixtral": {"input": 0.24, "output": 0.24},
-    
-    # DeepSeek
-    "deepseek-chat": {"input": 0.14, "output": 0.28},
-    "deepseek-reasoner": {"input": 0.55, "output": 2.19},
-    
-    # Groq (pricing varies, these are estimates)
-    "groq": {"input": 0.05, "output": 0.08},
-    "llama-3.3-70b": {"input": 0.59, "output": 0.79},
-    
-    # xAI Grok
-    "grok": {"input": 2.00, "output": 10.00},
-    
-    # OpenRouter (examples, actual prices vary by model)
-    "mistralai/mixtral-8x7b": {"input": 0.24, "output": 0.24},
-    "meta-llama/llama-3": {"input": 0.10, "output": 0.10},
-    "qwen": {"input": 0.15, "output": 0.15},
-    
-    # Local (free)
-    "ollama": {"input": 0, "output": 0},
-    "local": {"input": 0, "output": 0},
-    "phi": {"input": 0, "output": 0},
-}
+# Chemin du JSON pricing vendored (à la racine du projet)
+PRICING_FILE = Path(__file__).resolve().parent / "pricing.json"
+
+# Hosts considérés comme locaux (cost = 0 sans warning)
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+
+# Fallback si modèle inconnu (hors providers locaux)
+FALLBACK_PRICING = {"input": 1.00, "output": 3.00}
+
+
+def _load_pricing_db() -> dict:
+    """Charge pricing.json et convertit per-token → per-1M-tokens.
+
+    Retourne un dict {model_key: {"input": float, "output": float}}.
+    Les entrées sans prix sont ignorées (ex: sample_spec).
+    """
+    if not PRICING_FILE.exists():
+        logger.warning(f"pricing.json introuvable à {PRICING_FILE}, lookup externe désactivé")
+        return {}
+
+    try:
+        with open(PRICING_FILE) as f:
+            raw = json.load(f)
+    except Exception as e:
+        logger.warning(f"Impossible de charger {PRICING_FILE}: {e}")
+        return {}
+
+    db = {}
+    for key, entry in raw.items():
+        if key == "sample_spec" or not isinstance(entry, dict):
+            continue
+        inp = entry.get("input_cost_per_token")
+        out = entry.get("output_cost_per_token")
+        if inp is None or out is None:
+            continue
+        db[key] = {
+            "input": float(inp) * 1_000_000,
+            "output": float(out) * 1_000_000,
+        }
+    return db
+
+
+# Chargement au module-load (partagé entre instances)
+_PRICING_DB = _load_pricing_db()
 
 
 class BudgetManager:
@@ -115,34 +123,61 @@ class BudgetManager:
         except Exception as e:
             logger.warning(f"Could not save tracking file: {e}")
     
-    def get_model_pricing(self, model_name: str) -> dict:
-        """Get pricing for a model."""
-        # Check custom pricing first
+    def get_model_pricing(
+        self,
+        model_name: str,
+        model_id: str | None = None,
+        provider: str | None = None,
+        base_url: str | None = None,
+    ) -> dict:
+        """Résout le pricing d'un modèle selon la cascade documentée.
+
+        Args:
+            model_name: Nom logique (clé du config.yaml, utilisé pour custom_pricing)
+            model_id: ID exact chez le provider (ex: "gpt-4o-mini", "mistral-large-latest")
+            provider: Nom du provider (ex: "openai", "ollama", "openrouter")
+            base_url: URL éventuelle (pour détecter les endpoints locaux non-ollama)
+        """
+        # 1. Override config.yaml (priorité max)
         if model_name in self.custom_pricing:
             return self.custom_pricing[model_name]
-        
-        # Check default pricing (partial match)
-        model_lower = model_name.lower()
-        for pattern, pricing in DEFAULT_PRICING.items():
-            if pattern in model_lower:
-                return pricing
-        
-        # Check if it's a local model
-        if "local" in model_lower or "ollama" in model_lower or "llama-local" in model_lower:
+
+        # 2 & 3. Lookup pricing.json : exact puis {provider}/{model_id}
+        lookup_id = model_id or model_name
+        if lookup_id in _PRICING_DB:
+            return _PRICING_DB[lookup_id]
+        if provider:
+            prefixed = f"{provider}/{lookup_id}"
+            if prefixed in _PRICING_DB:
+                return _PRICING_DB[prefixed]
+
+        # 4. Règle locale : ollama ou base_url pointant sur localhost
+        if provider == "ollama":
             return {"input": 0, "output": 0}
-        
-        # Default: assume moderate pricing
-        logger.warning(f"No pricing found for {model_name}, using default")
-        return {"input": 1.00, "output": 3.00}
-    
-    def estimate_request_cost(self, model_name: str, input_tokens: int, output_tokens: int) -> float:
-        """Estimate cost for a request."""
-        pricing = self.get_model_pricing(model_name)
-        
-        # Convert from per-1M-tokens to actual cost
+        if base_url:
+            host = urlparse(base_url).hostname
+            if host in LOCAL_HOSTS:
+                return {"input": 0, "output": 0}
+
+        # 5. Fallback conservateur avec warning
+        logger.warning(f"Pricing introuvable pour {model_name} (id={model_id}, provider={provider}), fallback par défaut")
+        return dict(FALLBACK_PRICING)
+
+    def estimate_request_cost(
+        self,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        model_id: str | None = None,
+        provider: str | None = None,
+        base_url: str | None = None,
+    ) -> float:
+        """Estime le coût d'une requête (per-1M-tokens)."""
+        pricing = self.get_model_pricing(model_name, model_id=model_id, provider=provider, base_url=base_url)
+
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
         output_cost = (output_tokens / 1_000_000) * pricing["output"]
-        
+
         return input_cost + output_cost
     
     def check_budget(self, estimated_cost: float) -> dict:
@@ -246,32 +281,24 @@ class BudgetManager:
 
 
 def estimate_cost(models: list[str], input_tokens: int, output_tokens: int, pricing: dict = None) -> dict:
-    """Standalone cost estimation function."""
-    if pricing is None:
-        pricing = DEFAULT_PRICING
-    
+    """Estimation standalone (sans instance BudgetManager).
+
+    Lookup simple par model_id dans la DB pricing.json ; fallback sur FALLBACK_PRICING.
+    """
+    db = pricing if pricing is not None else _PRICING_DB
+
     estimates = {}
     total = 0
-    
+
     for model in models:
-        model_lower = model.lower()
-        model_pricing = None
-        
-        # Find matching pricing
-        for pattern, price in pricing.items():
-            if pattern in model_lower:
-                model_pricing = price
-                break
-        
-        if model_pricing is None:
-            model_pricing = {"input": 1.00, "output": 3.00}  # Default
-        
+        model_pricing = db.get(model) or FALLBACK_PRICING
+
         cost = (input_tokens / 1_000_000) * model_pricing["input"] + \
                (output_tokens / 1_000_000) * model_pricing["output"]
-        
+
         estimates[model] = round(cost, 6)
         total += cost
-    
+
     return {
         "estimates": estimates,
         "total": round(total, 6),

@@ -1,13 +1,14 @@
 """
 LLM Provider implementations.
 
-Most providers are OpenAI-compatible, so we use a generic function.
-Only Anthropic and Google need specific handlers.
+Tous les providers cloud passent par un handler OpenAI-compatible unique
+(Anthropic et Google exposent désormais des endpoints officiels compatibles).
+Seul Ollama conserve un handler spécifique (format de réponse différent).
 
 Supported providers:
-- openai, openrouter, mistral, deepseek, groq, together, xai, ollama → OpenAI-compatible
-- anthropic → Specific handler
-- google → Specific handler
+- openai, openrouter, mistral, deepseek, groq, together, xai,
+  anthropic, google → OpenAI-compatible
+- ollama → Specific handler (local, no auth, different response format)
 - custom → OpenAI-compatible with custom base_url
 """
 
@@ -74,15 +75,16 @@ PROVIDER_REGISTRY = {
         "base_url": "http://localhost:11434",
         "api_key_env": None,
     },
-    # Non OpenAI-compatible providers
+    # Endpoints OpenAI-compatibles officiels (beta vendor)
+    # Limitation connue Anthropic : prompt caching non disponible sur cet endpoint
     "anthropic": {
-        "type": "anthropic",
+        "type": "openai_compatible",
         "base_url": "https://api.anthropic.com/v1",
         "api_key_env": "ANTHROPIC_API_KEY",
     },
     "google": {
-        "type": "google",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "type": "openai_compatible",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "api_key_env": "GOOGLE_API_KEY",
     },
 }
@@ -202,10 +204,6 @@ class ProviderManager:
                 return await self._query_openai_compatible(model, provider_config, prompt, max_tokens)
             elif provider_type == "ollama":
                 return await self._query_ollama(model, provider_config, prompt, max_tokens)
-            elif provider_type == "anthropic":
-                return await self._query_anthropic(model, provider_config, prompt, max_tokens)
-            elif provider_type == "google":
-                return await self._query_google(model, provider_config, prompt, max_tokens)
             else:
                 return {"error": f"Unknown provider type: {provider_type}"}
         
@@ -327,101 +325,4 @@ class ProviderManager:
             "input_tokens": data.get("prompt_eval_count"),
             "output_tokens": data.get("eval_count"),
             "cost": 0,  # Local models are free
-        }
-    
-    # =========================================================================
-    # Anthropic Handler (different API format)
-    # =========================================================================
-    
-    async def _query_anthropic(
-        self,
-        model: dict,
-        provider_config: dict,
-        prompt: str,
-        max_tokens: int
-    ) -> dict:
-        """Handler for Anthropic API (non-OpenAI format)."""
-        api_key = self.api_keys.get("anthropic")
-        if not api_key:
-            return {"error": "Anthropic API key not found"}
-
-        base_url = provider_config["base_url"]
-
-        # Validation SSRF
-        if not _validate_url(base_url):
-            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
-
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{base_url}/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
-                json={
-                    "model": model["model_id"],
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": max_tokens,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-        
-        return {
-            "content": data["content"][0]["text"],
-            "input_tokens": data["usage"]["input_tokens"],
-            "output_tokens": data["usage"]["output_tokens"],
-        }
-    
-    # =========================================================================
-    # Google Gemini Handler (different API format)
-    # =========================================================================
-    
-    async def _query_google(
-        self,
-        model: dict,
-        provider_config: dict,
-        prompt: str,
-        max_tokens: int
-    ) -> dict:
-        """Handler for Google Gemini API (non-OpenAI format)."""
-        api_key = self.api_keys.get("google")
-        if not api_key:
-            return {"error": "Google API key not found"}
-
-        base_url = provider_config["base_url"]
-
-        # Validation SSRF
-        if not _validate_url(base_url):
-            return {"error": f"URL non autorisée: {base_url}. Ajoutez le host à ALLOWED_HOSTS."}
-
-        model_id = model["model_id"]
-        url = f"{base_url}/models/{model_id}:generateContent"
-
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                url,
-                # Utiliser header au lieu de query param (évite fuite dans les logs)
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key,
-                },
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": max_tokens,
-                    },
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-        
-        content = data["candidates"][0]["content"]["parts"][0]["text"]
-        usage = data.get("usageMetadata", {})
-        
-        return {
-            "content": content,
-            "input_tokens": usage.get("promptTokenCount"),
-            "output_tokens": usage.get("candidatesTokenCount"),
         }

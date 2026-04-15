@@ -8,7 +8,8 @@ An MCP server that orchestrates sparring sessions between LLMs. Query multiple m
 
 - **Multi-provider**: OpenAI, Anthropic, Google, OpenRouter, Ollama, custom endpoints
 - **Budget control**: Session, daily, and per-request limits with tracking
-- **Simple primitives**: `ask_model`, `ask_all`, `challenge`, `get_models`, `get_usage`
+- **Simple primitives**: `ask_model`, `ask_all`, `challenge`, `get_models`, `get_lenses`, `get_usage`, `estimate_cost`
+- **Challenge lenses**: 10 perspectives (devil_advocate, cynical_dev, security, cost, user, scale, simplicity, naive, pragmatist, steelman)
 - **Local-first**: Works with Ollama for free local inference
 
 ## Installation
@@ -117,20 +118,23 @@ ask_all(
 
 ### `challenge`
 
-Have one model critique another's response. This is the heart of sparring.
+Have one model critique a response (from another model, a file, a snippet — any text).
+This is the heart of sparring.
 
 ```
 challenge(
   challenger_model: "gemini-flash",
   original_question: "Best database for time-series?",
   target_response: "PostgreSQL with TimescaleDB because...",
-  target_model: "gpt-4o"  # optional, for context
+  target_source: "gpt-4o",         # optional: model name, file name, etc.
+  lens: "devil_advocate",          # optional: see get_lenses. null = natural critique
+  language: "fr"                   # optional: "fr" (default) or "en"
 )
 ```
 
 ### `get_models`
 
-List all configured models with their status.
+List all configured models with their status and pricing.
 
 ```
 get_models()
@@ -139,12 +143,35 @@ get_models()
 ```json
 {
   "models": [
-    {"name": "gpt-4o", "status": "available", "pricing": {"input": 2.50, "output": 10.00}},
-    {"name": "llama-local", "status": "available", "pricing": {"input": 0, "output": 0}},
-    {"name": "claude-haiku", "status": "unavailable", "enabled": false}
+    {
+      "name": "gpt-4o",
+      "provider": "openai",
+      "model_id": "gpt-4o",
+      "status": "available",
+      "enabled": true,
+      "pricing": {"input": 2.50, "output": 10.00}
+    },
+    {
+      "name": "llama-local",
+      "provider": "ollama",
+      "model_id": "llama3.2",
+      "status": "available",
+      "enabled": true,
+      "pricing": {"input": 0, "output": 0}
+    }
   ]
 }
 ```
+
+### `get_lenses`
+
+List available challenge lenses with descriptions.
+
+```
+get_lenses()
+```
+
+Returns the 10 built-in lenses (`devil_advocate`, `steelman`, `pragmatist`, `cynical_dev`, `security`, `cost`, `user`, `scale`, `simplicity`, `naive`) plus the default and a note on passing `lens: null` for a natural critique without persona.
 
 ### `get_usage`
 
@@ -197,16 +224,16 @@ models:
 | Provider | Env Var | Type | Notes |
 |----------|---------|------|-------|
 | `openai` | `OPENAI_API_KEY` | OpenAI-compat | GPT-4, GPT-4o |
+| `anthropic` | `ANTHROPIC_API_KEY` | OpenAI-compat | Claude (endpoint beta, **no prompt caching**) |
+| `google` | `GOOGLE_API_KEY` | OpenAI-compat | Gemini (endpoint beta) |
 | `openrouter` | `OPENROUTER_API_KEY` | OpenAI-compat | **Recommended**: 400+ models |
 | `mistral` | `MISTRAL_API_KEY` | OpenAI-compat | Mistral Large, Small |
 | `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compat | DeepSeek Chat, Reasoner |
 | `groq` | `GROQ_API_KEY` | OpenAI-compat | Very fast inference |
 | `together` | `TOGETHER_API_KEY` | OpenAI-compat | Open source models |
 | `xai` | `XAI_API_KEY` | OpenAI-compat | Grok |
-| `ollama` | — | Ollama | Local models, free |
-| `anthropic` | `ANTHROPIC_API_KEY` | Custom | Claude |
-| `google` | `GOOGLE_API_KEY` | Custom | Gemini |
 | `custom` | Custom | OpenAI-compat | Any compatible endpoint |
+| `ollama` | — | Ollama | Local models, free (dedicated handler) |
 
 Adding an OpenAI-compatible provider in `providers.py`:
 
@@ -226,6 +253,26 @@ budget:
   session_limit: 1.00      # Max per session
   daily_limit: 5.00        # Max per day
   tracking_file: "~/.config/mcp/llm-sparring/usage.json"
+```
+
+### Pricing
+
+Pricing data comes from `pricing.json` (~2600 modèles, vendored depuis [LiteLLM](https://github.com/BerriAI/litellm)).
+Résolution en cascade : override `config.yaml` → lookup exact → `{provider}/{model_id}` → règle locale (ollama/localhost → 0) → fallback conservateur avec warning.
+
+Refresh trimestriel recommandé :
+
+```bash
+python scripts/refresh_pricing.py
+```
+
+Override pour un modèle absent du JSON ou pour forcer un tarif, dans `config.yaml` :
+
+```yaml
+pricing:
+  my-custom-model:
+    input: 0.50    # per 1M tokens
+    output: 1.50
 ```
 
 ## Usage with /sparring
@@ -292,7 +339,8 @@ challenge(
   challenger_model: "gemini-flash",
   original_question: "What is the best programming language?",
   target_response: "Python because it's simple",
-  target_model: "gpt-4o"
+  target_source: "gpt-4o",
+  lens: "devil_advocate"
 )
 ```
 

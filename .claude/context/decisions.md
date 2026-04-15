@@ -61,3 +61,17 @@ Technical decisions and their context. Added via `/retro`.
 **Context**: Gives at-a-glance metadata (model, lens, cost) without parsing the full JSON. Format: `[model | $cost]` for ask, `[model | lens | $cost]` for challenge. Being first in dict means it's immediately visible in output.
 **Alternatives considered**: Prepend to response text (pollutes content), separate metadata endpoint (extra call)
 **Date**: 2026-02-10
+
+### OpenAI-compat endpoints unifiés pour Anthropic et Google
+**Decision**: Supprimer les handlers custom `_query_anthropic` et `_query_google` et router les deux providers via `_query_openai_compatible` sur leurs endpoints officiels.
+**Context**: Anthropic (`https://api.anthropic.com/v1/`) et Google (`https://generativelanguage.googleapis.com/v1beta/openai/`) exposent désormais des endpoints OpenAI-compatibles. Supprime ~90 lignes de handlers spécifiques et unifie le chemin d'exécution sur un seul generic handler. Réaffirme la décision "Multi-provider architecture" de 2025-01-29 en la simplifiant : 11 providers, 1 handler cloud + 1 handler ollama.
+**Tradeoff**: Le prompt caching Anthropic **n'est pas supporté** sur l'endpoint OpenAI-compat (limitation officielle documentée). Pour un usage sparring one-shot l'impact est mineur. Si le caching devient nécessaire un jour, réintroduire un handler natif pour Anthropic uniquement.
+**Alternatives considered**: Conserver les handlers custom (dette maintenance, 90 lignes de duplication), migrer sur LiteLLM complet (overhead 200 MB + startup +3s + API qui bouge tous les X jours, rejeté — cf. analyse pré-plan).
+**Date**: 2026-04-15
+
+### Pricing vendored depuis LiteLLM
+**Decision**: Remplacer `DEFAULT_PRICING` hardcodé (~45 entrées figées « as of Jan 2025 ») par un `pricing.json` vendored depuis `BerriAI/litellm`. Refresh manuel trimestriel via `scripts/refresh_pricing.py`.
+**Context**: La table hardcodée s'était dégradée : Claude 4.x, GPT-5, Gemini 2.5 absents. Le JSON LiteLLM donne ~2600 modèles à jour. Vendor plutôt que dépendance runtime évite 200 MB d'overhead et un chemin réseau caché au démarrage. Cascade de lookup : override config.yaml → exact model_id → `{provider}/{model_id}` → règle locale (ollama/localhost → 0) → fallback conservateur avec warning.
+**Tradeoff**: Refresh manuel requis (~1×/trimestre). Les modèles dépréciés non listés par LiteLLM tombent en fallback warning-loggé — l'utilisateur doit soit passer à un modèle récent, soit ajouter un override dans la section `pricing` de `config.yaml`.
+**Alternatives considered**: Dépendance runtime `litellm` (rejeté : overhead mémoire/startup, API unstable, incompatible KISS), maintenir manuellement (status quo, non viable long terme), loader le JSON runtime depuis GitHub (ajoute un appel réseau au boot + point de panne).
+**Date**: 2026-04-15
