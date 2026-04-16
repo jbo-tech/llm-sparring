@@ -71,10 +71,10 @@ Technical decisions and their context. Added via `/retro`.
 **Date**: 2026-04-15
 
 ### Migration vers uv + pyproject.toml
-**Decision**: Remplacer `pip + venv + requirements.txt` par `uv + pyproject.toml + uv.lock`. MCP invoqué via `uv --directory <path> run server.py` au lieu de `.venv/bin/python server.py`. `requirements.txt` supprimé, `uv.lock` committé, `.python-version` pinné à `3.11`.
+**Decision**: Remplacer `pip + venv + requirements.txt` par `uv + pyproject.toml + uv.lock`. MCP invoqué via `uv --directory <path> run server.py` au lieu de `.venv/bin/python server.py`. `requirements.txt` supprimé, `uv.lock` committé. Pas de `.python-version` committé — `requires-python = ">=3.11"` dans `pyproject.toml` suffit à uv, et un `.python-version` partagé entre outils entre en conflit avec `pyenv` (qui exige une version exactement installée).
 **Context**: Supersede la décision du 2026-02-08. `uv run` rend l'installation auto-bootstrap (clone → run sans étape manuelle). Lockfile déterministe remplace les contraintes `>=` floues. Un seul outil gère Python (installe 3.11 si absent) + venv + deps. Corrige aussi l'incohérence entre la doc (3.11+) et le venv réel (3.10).
 **Tradeoff**: `uv` devient un prérequis pour exécuter le MCP. Pour un projet perso maintenu solo, gain > coût.
-**Alternatives considered**: Garder `requirements.txt` généré en parallèle (double source de vérité, rejeté), aligner la doc sur Python 3.10 (garde le setup intact mais n'adresse pas les motivations principales).
+**Alternatives considered**: Garder `requirements.txt` généré en parallèle (double source de vérité, rejeté), aligner la doc sur Python 3.10 (garde le setup intact mais n'adresse pas les motivations principales), committer `.python-version` (rejeté après test — conflit avec `pyenv` installé en parallèle qui lit le même fichier).
 **Date**: 2026-04-16
 
 ### Pricing vendored depuis LiteLLM
