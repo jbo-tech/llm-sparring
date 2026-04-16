@@ -28,10 +28,10 @@ cp -r . ~/.claude/mcp/llm-sparring/
 
 ```bash
 cd ~/.claude/mcp/llm-sparring
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
+
+`uv` gère l'installation de Python 3.11 si besoin, crée `.venv/` et installe les deps depuis `uv.lock`. [Installer uv](https://docs.astral.sh/uv/getting-started/installation/) si absent.
 
 ### 3. Configure models
 
@@ -71,8 +71,13 @@ export XAI_API_KEY="..."
 {
   "mcpServers": {
     "sparring": {
-      "command": "/Users/YOU/.claude/mcp/llm-sparring/.venv/bin/python",
-      "args": ["/Users/YOU/.claude/mcp/llm-sparring/server.py"],
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/Users/YOU/.claude/mcp/llm-sparring",
+        "run",
+        "server.py"
+      ],
       "env": {
         "OPENAI_API_KEY": "sk-...",
         "GOOGLE_API_KEY": "...",
@@ -86,7 +91,7 @@ export XAI_API_KEY="..."
 **For Claude Code CLI**:
 
 ```bash
-claude mcp add sparring ~/.claude/mcp/llm-sparring/.venv/bin/python ~/.claude/mcp/llm-sparring/server.py
+claude mcp add sparring -- uv --directory ~/.claude/mcp/llm-sparring run server.py
 ```
 
 ## Tools
@@ -263,7 +268,7 @@ Résolution en cascade : override `config.yaml` → lookup exact → `{provider}
 Refresh trimestriel recommandé :
 
 ```bash
-python scripts/refresh_pricing.py
+uv run scripts/refresh_pricing.py
 ```
 
 Override pour un modèle absent du JSON ou pour forcer un tarif, dans `config.yaml` :
@@ -295,15 +300,14 @@ This MCP is designed to work with a `/sparring` command in Claude Code:
 
 ```bash
 cd ~/.claude/mcp/llm-sparring
-source .venv/bin/activate
-python server.py
+uv run server.py
 # Ctrl+C to stop
 ```
 
 In debug mode for more details:
 
 ```bash
-LOG_LEVEL=DEBUG python server.py
+LOG_LEVEL=DEBUG uv run server.py
 ```
 
 ### 2. Check model configuration
@@ -383,8 +387,8 @@ This runs the full orchestration flow (framing, ask_all, challenge, synthesis).
 ## Development
 
 ```bash
-python server.py
-LOG_LEVEL=DEBUG python server.py
+uv run server.py
+LOG_LEVEL=DEBUG uv run server.py
 ```
 
 ## License

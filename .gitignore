@@ -28,7 +28,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.python-version
 
 # IDE
 .vscode/

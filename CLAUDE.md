@@ -5,9 +5,9 @@ MCP server for multi-LLM sparring sessions. Make your LLMs disagree.
 ## Commands
 
 ```bash
-python server.py                    # Run server
-LOG_LEVEL=DEBUG python server.py    # Debug mode
-pip install -r requirements.txt     # Install deps
+uv run server.py                    # Run server
+LOG_LEVEL=DEBUG uv run server.py    # Debug mode
+uv sync                             # Install deps
 ```
 
 ## Stack

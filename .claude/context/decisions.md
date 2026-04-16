@@ -49,6 +49,7 @@ Technical decisions and their context. Added via `/retro`.
 **Context**: Isolates MCP dependencies from global Python. The `.gitignore` already had `.venv/` listed. Claude Desktop `command` and CLI `mcp add` point to `.venv/bin/python` to avoid activation issues.
 **Alternatives considered**: Global pip install, uv, system package manager
 **Date**: 2026-02-08
+**Statut**: superseded le 2026-04-16 — voir « Migration vers uv + pyproject.toml »
 
 ### Lens definitions in English
 **Decision**: Write all lens system prompts and focus instructions in English, even though response language is configurable (fr/en)
@@ -68,6 +69,13 @@ Technical decisions and their context. Added via `/retro`.
 **Tradeoff**: Le prompt caching Anthropic **n'est pas supporté** sur l'endpoint OpenAI-compat (limitation officielle documentée). Pour un usage sparring one-shot l'impact est mineur. Si le caching devient nécessaire un jour, réintroduire un handler natif pour Anthropic uniquement.
 **Alternatives considered**: Conserver les handlers custom (dette maintenance, 90 lignes de duplication), migrer sur LiteLLM complet (overhead 200 MB + startup +3s + API qui bouge tous les X jours, rejeté — cf. analyse pré-plan).
 **Date**: 2026-04-15
+
+### Migration vers uv + pyproject.toml
+**Decision**: Remplacer `pip + venv + requirements.txt` par `uv + pyproject.toml + uv.lock`. MCP invoqué via `uv --directory <path> run server.py` au lieu de `.venv/bin/python server.py`. `requirements.txt` supprimé, `uv.lock` committé, `.python-version` pinné à `3.11`.
+**Context**: Supersede la décision du 2026-02-08. `uv run` rend l'installation auto-bootstrap (clone → run sans étape manuelle). Lockfile déterministe remplace les contraintes `>=` floues. Un seul outil gère Python (installe 3.11 si absent) + venv + deps. Corrige aussi l'incohérence entre la doc (3.11+) et le venv réel (3.10).
+**Tradeoff**: `uv` devient un prérequis pour exécuter le MCP. Pour un projet perso maintenu solo, gain > coût.
+**Alternatives considered**: Garder `requirements.txt` généré en parallèle (double source de vérité, rejeté), aligner la doc sur Python 3.10 (garde le setup intact mais n'adresse pas les motivations principales).
+**Date**: 2026-04-16
 
 ### Pricing vendored depuis LiteLLM
 **Decision**: Remplacer `DEFAULT_PRICING` hardcodé (~45 entrées figées « as of Jan 2025 ») par un `pricing.json` vendored depuis `BerriAI/litellm`. Refresh manuel trimestriel via `scripts/refresh_pricing.py`.
