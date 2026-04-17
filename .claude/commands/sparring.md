@@ -1,3 +1,8 @@
+---
+description: Orchestrate a multi-LLM sparring session — make your models disagree productively
+argument-hint: [question or topic to spar on]
+---
+
 # Sparring
 
 **Make your LLMs disagree.**
