@@ -4,9 +4,17 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Modernisation architecture faite (OpenAI-compat unifié + pricing vendored). Prêt pour tests live avec providers réels.
+Template sparring exposé nativement via MCP Prompts. Prêt pour tests d'usage cross-projets.
 
 ## Log
+
+### 2026-04-18
+- Done: Ajout `list_prompts` / `get_prompt` dans `server.py` — le template `.claude/commands/sparring.md` est désormais exposé comme MCP Prompt (`/mcp__sparring__sparring [topic]`). Frontmatter YAML strippé à la lecture, argument `topic` optionnel suffixé en bas du prompt.
+- Done: Frontmatter ajouté à `.claude/commands/sparring.md` (commit `26eea49`).
+- Done: Smoke test handlers OK (list + get avec topic).
+- Décision actée: MCP Prompt choisi plutôt que symlink `~/.claude/commands/` — distribution native, zéro setup utilisateur, fonctionne partout où le MCP est connecté.
+- Anti-pattern identifié: j'avais diagnostiqué un problème de frontmatter sans demander où le repo était installé (`~/.claude/mcp/...` = hors scope du scan Claude Code).
+- Next: Commit du changement MCP Prompt. Retro + mise à jour README pour documenter `/mcp__sparring__sparring`.
 
 ### 2026-04-16
 - Done: Migration `pip + venv + requirements.txt` → `uv + pyproject.toml + uv.lock`. `.python-version` pinné à `3.11`. `requirements.txt` supprimé. Venv recréé sur Python 3.11.14 (corrige l'incohérence 3.10 vs doc 3.11+).

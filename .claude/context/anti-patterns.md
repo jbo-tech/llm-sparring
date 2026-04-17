@@ -39,3 +39,9 @@ Errors encountered and how to avoid them. Added via `/retro`.
 **Cause**: No validation before making HTTP requests
 **Solution**: Maintain ALLOWED_HOSTS allowlist, validate before every request
 **Date**: 2026-02-05
+
+### Slash command Claude Code confondu avec MCP Prompt
+**Problem**: Un fichier `.claude/commands/sparring.md` placé dans le repo MCP n'apparaît pas comme `/sparring` quand le repo est installé hors du cwd (ex. `~/.claude/mcp/<repo>/`).
+**Cause**: Claude Code scanne seulement `./.claude/commands/` (cwd) et `~/.claude/commands/` (global). Les `.claude/` de repos tiers sont invisibles. Un slash command projet n'est **pas** un canal de distribution — c'est un outil de dev interne au repo.
+**Solution**: Pour distribuer un template invocable par l'utilisateur via un MCP, exposer un **MCP Prompt** (`@server.list_prompts()` + `@server.get_prompt()`). Claude Code le surface comme `/mcp__<serveur>__<nom>` dès que le MCP est connecté, sans setup côté utilisateur. Avant de diagnostiquer un "slash command qui ne marche pas", demander **où le repo est installé**.
+**Date**: 2026-04-18

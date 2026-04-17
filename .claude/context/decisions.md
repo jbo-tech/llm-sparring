@@ -77,6 +77,13 @@ Technical decisions and their context. Added via `/retro`.
 **Alternatives considered**: Garder `requirements.txt` généré en parallèle (double source de vérité, rejeté), aligner la doc sur Python 3.10 (garde le setup intact mais n'adresse pas les motivations principales), committer `.python-version` (rejeté après test — conflit avec `pyenv` installé en parallèle qui lit le même fichier).
 **Date**: 2026-04-16
 
+### Template sparring exposé via MCP Prompt
+**Decision**: Exposer le template d'orchestration sparring comme MCP Prompt (`list_prompts` + `get_prompt` dans `server.py`), en lisant `.claude/commands/sparring.md` à la volée. Claude Code le surface automatiquement comme `/mcp__sparring__sparring [topic]` dès que le serveur est connecté.
+**Context**: Le fichier `.claude/commands/sparring.md` n'est scanné par Claude Code que si on lance depuis le dossier du repo. Quand l'utilisateur installe le MCP ailleurs (`~/.claude/mcp/llm-sparring/...` suivant le README), le slash command n'est jamais vu. MCP Prompts est la primitive native pour distribuer un template invocable par l'utilisateur — pas besoin de symlink ou de copie.
+**Tradeoff**: Nom de commande verbose côté Claude Code (`/mcp__sparring__sparring`). Acceptable car toutes les commandes MCP suivent ce format — c'est cohérent.
+**Alternatives considered**: Symlink `~/.claude/commands/sparring.md` (hors-MCP, setup manuel, à documenter), dupliquer le fichier (deux sources de vérité), mover le template en `prompts/sparring.md` (casserait `/sparring` pour les contributeurs qui bossent dans le repo).
+**Date**: 2026-04-18
+
 ### Pricing vendored depuis LiteLLM
 **Decision**: Remplacer `DEFAULT_PRICING` hardcodé (~45 entrées figées « as of Jan 2025 ») par un `pricing.json` vendored depuis `BerriAI/litellm`. Refresh manuel trimestriel via `scripts/refresh_pricing.py`.
 **Context**: La table hardcodée s'était dégradée : Claude 4.x, GPT-5, Gemini 2.5 absents. Le JSON LiteLLM donne ~2600 modèles à jour. Vendor plutôt que dépendance runtime évite 200 MB d'overhead et un chemin réseau caché au démarrage. Cascade de lookup : override config.yaml → exact model_id → `{provider}/{model_id}` → règle locale (ollama/localhost → 0) → fallback conservateur avec warning.
