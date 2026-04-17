@@ -24,7 +24,14 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import (
+    Tool,
+    TextContent,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    GetPromptResult,
+)
 
 from providers import ProviderManager
 from budget import BudgetManager, estimate_cost
@@ -147,6 +154,65 @@ def get_default_config() -> dict:
             "tracking_file": "~/.config/mcp/llm-sparring/usage.json",
         },
     }
+
+
+# =============================================================================
+# MCP Prompts
+# =============================================================================
+
+# Le prompt sparring est livré avec le serveur et exposé via MCP.
+# Claude Code l'affiche comme /mcp__sparring__sparring.
+SPARRING_PROMPT_PATH = Path(__file__).parent / ".claude" / "commands" / "sparring.md"
+
+
+def _load_sparring_prompt() -> str:
+    """Lit le template sparring.md et retire le frontmatter YAML éventuel."""
+    text = SPARRING_PROMPT_PATH.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4 :].lstrip("\n")
+    return text
+
+
+@server.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """Expose le template sparring comme prompt MCP."""
+    return [
+        Prompt(
+            name="sparring",
+            description="Orchestrate a multi-LLM sparring session — make your models disagree productively",
+            arguments=[
+                PromptArgument(
+                    name="topic",
+                    description="Question ou sujet à soumettre aux sparring partners",
+                    required=False,
+                ),
+            ],
+        ),
+    ]
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
+    """Retourne le contenu du prompt demandé."""
+    if name != "sparring":
+        raise ValueError(f"Unknown prompt: {name}")
+
+    body = _load_sparring_prompt()
+    topic = (arguments or {}).get("topic", "").strip()
+    if topic:
+        body = f"{body}\n\n---\n\n**Sujet de la session :** {topic}"
+
+    return GetPromptResult(
+        description="Sparring session orchestration template",
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text=body),
+            ),
+        ],
+    )
 
 
 # =============================================================================
