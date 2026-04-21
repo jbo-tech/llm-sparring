@@ -43,25 +43,43 @@ nano ~/.config/mcp/llm-sparring/config.yaml
 
 ### 4. Set API keys
 
-```bash
-# Add to ~/.zshrc or ~/.bashrc
+Trois options, par ordre de préférence :
 
-# Core providers
+**A. Fichier `.env` dans le dossier du serveur (recommandé)**
+
+Le serveur charge automatiquement `~/.claude/mcp/llm-sparring/.env` au démarrage.
+Les clés restent scopées au MCP, ne polluent pas l'environnement global, et ne
+dépendent pas du shell qui lance Claude Code.
+
+```bash
+cat > ~/.claude/mcp/llm-sparring/.env <<'EOF'
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
+OPENROUTER_API_KEY=sk-or-...
+# MISTRAL_API_KEY=...
+# DEEPSEEK_API_KEY=...
+# GROQ_API_KEY=...
+# XAI_API_KEY=...
+# ANTHROPIC_API_KEY=...   # rarement utile (on EST Claude)
+EOF
+chmod 600 ~/.claude/mcp/llm-sparring/.env
+```
+
+`.env` est déjà listé dans `.gitignore`.
+
+**B. Bloc `env` de la config MCP** — voir l'étape 5 ci-dessous. Clés en clair dans `~/.claude.json`.
+
+**C. Variables d'environnement globales** (via `~/.zshenv` de préférence, pas `~/.zshrc` qui n'est pas lu par les shells non-interactifs).
+
+```bash
+# ~/.zshenv
 export OPENAI_API_KEY="sk-..."
 export GOOGLE_API_KEY="..."
-
-# Recommended: OpenRouter gives access to 400+ models
 export OPENROUTER_API_KEY="sk-or-..."
-
-# Additional providers (optional)
-export MISTRAL_API_KEY="..."
-export DEEPSEEK_API_KEY="..."
-export GROQ_API_KEY="..."
-export XAI_API_KEY="..."
-
-# Usually not needed (we ARE Claude)
-# export ANTHROPIC_API_KEY="..."
 ```
+
+> ⚠️ Un simple `export` dans un terminal ouvert ne suffit pas : Claude Code
+> doit être relancé depuis un shell qui a ces variables dans son environnement.
 
 ### 5. Add to Claude Code
 
@@ -366,11 +384,15 @@ This runs the full orchestration flow (framing, ask_all, challenge, synthesis).
 
 ## Troubleshooting
 
-### "No models available"
+### "No models available" / `status: "unavailable"`
 
-- Check API keys: `echo $OPENAI_API_KEY`
+- Vérifier que le serveur voit bien les clés : `cat ~/.claude/mcp/llm-sparring/.env`
+  (option A) ou le bloc `env` dans `~/.claude.json` (option B).
+- `echo $OPENAI_API_KEY` dans un terminal ne prouve rien : le MCP tourne dans un
+  sous-processus lancé par Claude Code, pas dans ton shell.
 - Check config: `cat ~/.config/mcp/llm-sparring/config.yaml`
 - At least one model must be `enabled: true`
+- Après modif du `.env` ou de `~/.claude.json`, redémarrer Claude Code.
 
 ### "Timeout querying model"
 

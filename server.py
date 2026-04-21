@@ -22,6 +22,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Charge les variables d'environnement depuis .env (à côté de ce fichier)
+# avant tout import qui lit os.environ (providers.ProviderManager en dépend).
+load_dotenv(Path(__file__).parent / ".env")
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
