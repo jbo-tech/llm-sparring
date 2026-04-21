@@ -84,6 +84,13 @@ Technical decisions and their context. Added via `/retro`.
 **Alternatives considered**: Symlink `~/.claude/commands/sparring.md` (hors-MCP, setup manuel, à documenter), dupliquer le fichier (deux sources de vérité), mover le template en `prompts/sparring.md` (casserait `/sparring` pour les contributeurs qui bossent dans le repo).
 **Date**: 2026-04-18
 
+### Clés API chargées via `.env` local (option par défaut documentée)
+**Decision**: `server.py` appelle `load_dotenv(Path(__file__).parent / ".env")` au démarrage, avant l'import `providers`. `python-dotenv` promu en dep explicite. README réordonné pour présenter `.env` comme option A (recommandée), `~/.claude.json` → `env` comme option B, `~/.zshenv` comme option C.
+**Context**: Les trois options qui fonctionnaient en théorie avaient chacune un piège : (A) `.env` invisible car `load_dotenv()` jamais appelé malgré `python-dotenv` installé en transitif ; (B) bloc `env: {}` vide par défaut dans Claude Code ; (C) `~/.zshrc` documenté comme cible mais pas lu par les shells non-interactifs (et un simple `export` volatil ne suffit pas). L'option `.env` garde les secrets scopés au MCP, ne pollue pas l'environnement global, survit à un redémarrage de shell, et ne dépend pas du shell qui a lancé Claude Code. Chemin ancré via `Path(__file__).parent` pour être indépendant du `cwd`.
+**Tradeoff**: Un secret-store chiffré serait plus robuste (agenix, pass, sops), mais coût d'install trop élevé pour un outil perso mono-utilisateur. `.env` + `chmod 600` + `.gitignore` couvre le modèle de menace réel (éviter leak git, limiter exposition locale).
+**Alternatives considered**: `~/.zshenv` en défaut (rejeté : expose les clés à tout process lancé depuis zsh, mal scopé) ; bloc `env` dans `~/.claude.json` (rejeté par défaut : clés en clair dans un JSON manipulé par d'autres outils, pas au `chmod 600`) ; secret-store chiffré (rejeté : overkill).
+**Date**: 2026-04-21
+
 ### Pricing vendored depuis LiteLLM
 **Decision**: Remplacer `DEFAULT_PRICING` hardcodé (~45 entrées figées « as of Jan 2025 ») par un `pricing.json` vendored depuis `BerriAI/litellm`. Refresh manuel trimestriel via `scripts/refresh_pricing.py`.
 **Context**: La table hardcodée s'était dégradée : Claude 4.x, GPT-5, Gemini 2.5 absents. Le JSON LiteLLM donne ~2600 modèles à jour. Vendor plutôt que dépendance runtime évite 200 MB d'overhead et un chemin réseau caché au démarrage. Cascade de lookup : override config.yaml → exact model_id → `{provider}/{model_id}` → règle locale (ollama/localhost → 0) → fallback conservateur avec warning.

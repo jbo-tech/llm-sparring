@@ -4,9 +4,17 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Template sparring exposé nativement via MCP Prompts. Prêt pour tests d'usage cross-projets.
+Chargement des clés API via `.env` local, scopé au MCP. README réaligné sur trois options de gestion des secrets.
 
 ## Log
+
+### 2026-04-21
+- Done: Ajout `load_dotenv(Path(__file__).parent / ".env")` dans `server.py` avant l'import `providers` — le MCP lit désormais un `.env` à côté du binaire au lieu de dépendre de l'environnement hérité du process parent.
+- Done: `python-dotenv>=1.0` promu en dep explicite dans `pyproject.toml`, `uv.lock` régénéré.
+- Done: README §4 réécrit en trois options (A=`.env` recommandé, B=bloc `env` dans `~/.claude.json`, C=`~/.zshenv`). Warning explicite que `export` dans un terminal ne suffit pas. Troubleshooting « No models available » clarifié (vérifier `.env`, pas `echo $OPENAI_API_KEY` depuis un shell).
+- Diagnostic posé: `status: "unavailable"` silencieux venait du fait que le MCP tournait avec `env: {}` dans `~/.claude.json` + clés jamais persistées (ni `.zshrc` ni `.env`). `providers.py:145` renvoie `None` sans feedback.
+- Noté: repo **dev** (`/home/jbo/Wip/coding/mcp/llm-sparring/`) et repo **runtime** (`/home/jbo/.claude/mcp/llm-sparring/`) sont deux clones git distincts, pas des symlinks. Source de vérité = dev, `git pull` côté runtime pour propager.
+- Next: commit, `git pull` + `uv sync` côté runtime, créer `.env` runtime (`chmod 600`), redémarrer Claude Code, valider `get_models()`.
 
 ### 2026-04-18
 - Done: Ajout `list_prompts` / `get_prompt` dans `server.py` — le template `.claude/commands/sparring.md` est désormais exposé comme MCP Prompt (`/mcp__sparring__sparring [topic]`). Frontmatter YAML strippé à la lecture, argument `topic` optionnel suffixé en bas du prompt.

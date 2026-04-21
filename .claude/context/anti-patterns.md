@@ -45,3 +45,15 @@ Errors encountered and how to avoid them. Added via `/retro`.
 **Cause**: Claude Code scanne seulement `./.claude/commands/` (cwd) et `~/.claude/commands/` (global). Les `.claude/` de repos tiers sont invisibles. Un slash command projet n'est **pas** un canal de distribution — c'est un outil de dev interne au repo.
 **Solution**: Pour distribuer un template invocable par l'utilisateur via un MCP, exposer un **MCP Prompt** (`@server.list_prompts()` + `@server.get_prompt()`). Claude Code le surface comme `/mcp__<serveur>__<nom>` dès que le MCP est connecté, sans setup côté utilisateur. Avant de diagnostiquer un "slash command qui ne marche pas", demander **où le repo est installé**.
 **Date**: 2026-04-18
+
+### Clés API absentes sans feedback (`status: "unavailable"` silencieux)
+**Problem**: `get_models()` renvoie `status: "unavailable"` sans message d'erreur. L'utilisateur a « fait `export OPENAI_API_KEY=...` » mais les providers restent down.
+**Cause**: Trois pièges cumulés. (1) Le MCP tourne dans un sous-processus lancé par Claude Code — il n'hérite pas des `export` faits dans un terminal après le démarrage de Claude Code. (2) Le bloc `env: {}` vide dans `~/.claude.json` ne force rien côté MCP. (3) `providers.py:145` fait `os.environ.get(env_var)` et en cas d'absence désactive le provider silencieusement (pas de log). (4) `python-dotenv` était présent en transitif mais jamais appelé : pas de `.env` local lu.
+**Solution**: Charger les clés via `load_dotenv(Path(__file__).parent / ".env")` en haut de `server.py`, avant l'import de `providers`. Ancrer le chemin via `__file__` pour ne pas dépendre du `cwd`. Documenter le `.env` comme option principale dans le README, avertir que `export` dans un shell ne suffit pas. En debug : toujours vérifier le vrai `env` vu par le sous-processus, pas `echo $VAR` dans le shell de l'utilisateur.
+**Date**: 2026-04-21
+
+### Dev repo et runtime repo confondus
+**Problem**: Patcher un fichier dans le repo de dev n'a aucun effet sur le comportement observé — le MCP continue à se comporter comme avant.
+**Cause**: Deux clones git distincts (`/home/jbo/Wip/coding/mcp/llm-sparring/` dev, `/home/jbo/.claude/mcp/llm-sparring/` runtime enregistré dans `~/.claude.json`). Pas de symlink, pas de sync automatique. Facilement invisible si on ne vérifie pas le chemin du `command` MCP.
+**Solution**: Avant toute modif, vérifier le chemin exact dans `~/.claude.json` → `mcpServers.<name>.args`. Traiter le dev comme source de vérité, pousser via `git pull` côté runtime. En début de diagnostic, toujours comparer le chemin du runtime avec le `cwd` actuel.
+**Date**: 2026-04-21
