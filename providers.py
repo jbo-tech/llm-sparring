@@ -15,6 +15,7 @@ Supported providers:
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -22,6 +23,72 @@ import httpx
 logger = logging.getLogger("sparring.providers")
 
 DEFAULT_TIMEOUT = 30
+
+# Défauts du circuit breaker (surchargés via settings.circuit_breaker)
+DEFAULT_BREAKER_THRESHOLD = 3
+DEFAULT_BREAKER_COOLDOWN = 300  # secondes
+
+
+class CircuitBreaker:
+    """Désactive temporairement un modèle après N erreurs consécutives.
+
+    État en mémoire uniquement — un redémarrage du serveur remet tout à zéro.
+    """
+
+    def __init__(self, threshold: int = DEFAULT_BREAKER_THRESHOLD, cooldown: int = DEFAULT_BREAKER_COOLDOWN):
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self.state: dict[str, dict] = {}
+
+    def _entry(self, model_name: str) -> dict:
+        return self.state.setdefault(
+            model_name,
+            {"errors": 0, "disabled_until": None, "last_error": None, "last_error_ts": None},
+        )
+
+    def is_disabled(self, model_name: str) -> tuple[bool, float | None]:
+        entry = self.state.get(model_name)
+        if not entry:
+            return False, None
+        disabled_until = entry.get("disabled_until")
+        if disabled_until and time.time() < disabled_until:
+            return True, disabled_until
+        return False, None
+
+    def record_success(self, model_name: str):
+        if model_name in self.state:
+            self.state[model_name] = {
+                "errors": 0,
+                "disabled_until": None,
+                "last_error": None,
+                "last_error_ts": None,
+            }
+
+    def record_error(self, model_name: str, reason: str):
+        entry = self._entry(model_name)
+        entry["errors"] += 1
+        entry["last_error"] = reason
+        entry["last_error_ts"] = time.time()
+        if entry["errors"] >= self.threshold:
+            entry["disabled_until"] = time.time() + self.cooldown
+            logger.warning(
+                f"Circuit breaker OPEN pour {model_name} ({entry['errors']} erreurs) — "
+                f"désactivé pendant {self.cooldown}s. Dernière erreur: {reason}"
+            )
+
+    def status(self, model_name: str) -> dict:
+        entry = self.state.get(model_name)
+        if not entry:
+            return {"errors": 0, "disabled": False}
+        now = time.time()
+        disabled_until = entry.get("disabled_until")
+        disabled = bool(disabled_until and now < disabled_until)
+        return {
+            "errors": entry["errors"],
+            "disabled": disabled,
+            "disabled_until": disabled_until,
+            "last_error": entry.get("last_error"),
+        }
 
 # =============================================================================
 # Provider Registry
@@ -131,7 +198,14 @@ class ProviderManager:
         self.models = {m["name"]: m for m in models_config}
         self.settings = settings
         self.timeout = settings.get("default_timeout", DEFAULT_TIMEOUT)
-        
+
+        # Circuit breaker (in-memory, per-model)
+        breaker_cfg = settings.get("circuit_breaker", {}) or {}
+        self.breaker = CircuitBreaker(
+            threshold=breaker_cfg.get("threshold", DEFAULT_BREAKER_THRESHOLD),
+            cooldown=breaker_cfg.get("cooldown_seconds", DEFAULT_BREAKER_COOLDOWN),
+        )
+
         # Load API keys from environment
         self._load_api_keys()
     
@@ -181,10 +255,19 @@ class ProviderManager:
         """Query a specific model."""
         if model_name not in self.models:
             return {"error": f"Unknown model: {model_name}"}
-        
+
+        # Court-circuit si le breaker est ouvert pour ce modèle
+        disabled, until_ts = self.breaker.is_disabled(model_name)
+        if disabled:
+            return {
+                "error": "circuit breaker open",
+                "disabled_until": until_ts,
+                "reason": self.breaker.state[model_name].get("last_error"),
+            }
+
         model = self.models[model_name]
         provider = model["provider"]
-        
+
         # Get provider config (or use custom)
         if provider == "custom":
             provider_config = {
@@ -196,26 +279,47 @@ class ProviderManager:
             provider_config = PROVIDER_REGISTRY.get(provider)
             if not provider_config:
                 return {"error": f"Unknown provider: {provider}"}
-        
+
         try:
             provider_type = provider_config["type"]
-            
+
             if provider_type == "openai_compatible":
-                return await self._query_openai_compatible(model, provider_config, prompt, max_tokens)
+                result = await self._query_openai_compatible(model, provider_config, prompt, max_tokens)
             elif provider_type == "ollama":
-                return await self._query_ollama(model, provider_config, prompt, max_tokens)
+                result = await self._query_ollama(model, provider_config, prompt, max_tokens)
             else:
                 return {"error": f"Unknown provider type: {provider_type}"}
-        
+
         except asyncio.TimeoutError:
+            self.breaker.record_error(model_name, "timeout")
             return {"error": f"Timeout querying {model_name}"}
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error querying {model_name}: {e.response.status_code}")
+            self.breaker.record_error(model_name, f"HTTP {e.response.status_code}")
             # Ne pas exposer le corps de réponse (peut contenir des infos sensibles)
             return {"error": f"HTTP {e.response.status_code} from provider"}
         except Exception as e:
             logger.exception(f"Error querying {model_name}")
+            self.breaker.record_error(model_name, str(e)[:200])
             return {"error": str(e)}
+
+        # Validation post-appel : un 200 peut cacher un content null/vide
+        # (observé sur zai-glm — provider facture mais renvoie rien).
+        if "error" in result:
+            self.breaker.record_error(model_name, result["error"])
+            return result
+
+        content = result.get("content")
+        if not content or not str(content).strip():
+            self.breaker.record_error(model_name, "empty response")
+            return {
+                "error": "empty response",
+                "input_tokens": result.get("input_tokens"),
+                "output_tokens": result.get("output_tokens"),
+            }
+
+        self.breaker.record_success(model_name)
+        return result
     
     # =========================================================================
     # Generic OpenAI-Compatible Handler

@@ -83,7 +83,14 @@ class BudgetManager:
         # Tracking file
         tracking_path = config.get("tracking_file", "~/.config/mcp/llm-sparring/usage.json")
         self.tracking_file = Path(tracking_path).expanduser()
-        
+
+        # Journal append-only (une ligne JSON par requête)
+        journal_path = config.get(
+            "journal_file",
+            str(self.tracking_file.parent / "usage.jsonl"),
+        )
+        self.journal_file = Path(journal_path).expanduser()
+
         # Custom pricing overrides
         self.custom_pricing = config.get("pricing", {})
         
@@ -278,6 +285,82 @@ class BudgetManager:
         """Reset session tracking (e.g., when starting a new sparring session)."""
         self.session_cost = 0.0
         self.session_requests = 0
+
+    def record_event(self, event: dict):
+        """Append un évènement au journal JSONL (append-only, best-effort).
+
+        Un évènement = une requête (succès ou échec). Format attendu :
+          {ts, session_id, tool, model, provider, input_tokens, output_tokens,
+           cost, error, duration_ms}
+        """
+        try:
+            self.journal_file.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(event, ensure_ascii=False)
+            with open(self.journal_file, "a") as f:
+                f.write(line + "\n")
+        except Exception as e:
+            logger.warning(f"Could not append journal event: {e}")
+
+    def aggregate_session(self, session_id: str) -> dict:
+        """Agrège le journal pour une session donnée (lecture à la demande).
+
+        Retourne un breakdown par modèle + totaux. Si le journal est absent
+        ou la session introuvable, retourne des compteurs à zéro.
+        """
+        by_model: dict[str, dict] = {}
+        total_cost = 0.0
+        requests = 0
+        errors = 0
+        first_ts: str | None = None
+        last_ts: str | None = None
+
+        if self.journal_file.exists():
+            with open(self.journal_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("session_id") != session_id:
+                        continue
+
+                    model = ev.get("model", "unknown")
+                    bucket = by_model.setdefault(
+                        model,
+                        {"cost": 0.0, "requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0},
+                    )
+                    cost = ev.get("cost") or 0
+                    bucket["cost"] += cost
+                    bucket["requests"] += 1
+                    bucket["input_tokens"] += ev.get("input_tokens") or 0
+                    bucket["output_tokens"] += ev.get("output_tokens") or 0
+                    if ev.get("error"):
+                        bucket["errors"] += 1
+                        errors += 1
+                    total_cost += cost
+                    requests += 1
+
+                    ts = ev.get("ts")
+                    if ts:
+                        if first_ts is None or ts < first_ts:
+                            first_ts = ts
+                        if last_ts is None or ts > last_ts:
+                            last_ts = ts
+
+        return {
+            "session_id": session_id,
+            "total_cost": round(total_cost, 6),
+            "requests": requests,
+            "errors": errors,
+            "first_event": first_ts,
+            "last_event": last_ts,
+            "by_model": {
+                m: {**v, "cost": round(v["cost"], 6)} for m, v in by_model.items()
+            },
+        }
 
 
 def estimate_cost(models: list[str], input_tokens: int, output_tokens: int, pricing: dict = None) -> dict:

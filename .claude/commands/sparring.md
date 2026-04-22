@@ -18,12 +18,12 @@ A sparring partner is not an opponent. It's an ally who makes you better by trul
 ## Prerequisites
 
 Requires the `sparring` MCP server with tools:
-- `ask_model(model, question)` — query one sparring partner
-- `ask_all(question)` — query all partners in parallel
-- `challenge(challenger, question, response, lens?)` — the heart of sparring
-- `get_models()` — list available partners
+- `ask_model(model, question, session_id?)` — query one sparring partner
+- `ask_all(question, session_id?)` — query all partners in parallel
+- `challenge(challenger, question, response, lens?, session_id?)` — the heart of sparring
+- `get_models()` — list available partners (+ circuit breaker status)
 - `get_lenses()` — list available challenge lenses
-- `get_usage()` — check budget
+- `get_usage(session_id?)` — check budget (pass the session_id for a per-session breakdown)
 
 ## Your Role
 
@@ -69,6 +69,17 @@ A lens is a perspective applied to a challenge. The persona is NOT on the model 
 **Oublié les lenses ?** → `/sparring lenses` pour les lister
 
 ## Process
+
+### 0. Generate a session_id
+
+Dès le début de la session, génère un identifiant court et passe-le à **chaque** appel d'outil (`ask_model`, `ask_all`, `challenge`). Il permet de consolider la facturation de la session après coup (via `get_usage(session_id=...)` ou `scripts/consolidate_usage.py --session <id>`).
+
+```bash
+# exemple de format : date + slug court de la question
+date +%Y%m%d-%H%M%S   # → 20260422-143012
+```
+
+Garde cet ID en tête pendant toute la session et affiche-le dans le header de sortie pour que l'humain puisse le retrouver.
 
 ### 1. Frame (with human)
 
@@ -149,7 +160,8 @@ challenge(
     target_response="[content to critique]",
     target_source="gpt-4o",  # or "server.py" or "draft proposal"
     lens="devil_advocate",   # or null for natural critique
-    language="fr"
+    language="fr",
+    session_id="20260422-143012"  # même ID tout au long de la session
 )
 ```
 
@@ -216,6 +228,9 @@ Synthesize what the sparring revealed — not THE answer, but the landscape of t
 
 ### If you had to decide now
 [Your synthesis — not consensus, but informed perspective]
+
+### Session billing
+Appelle `get_usage(session_id="<id>")` et reporte le `sparring_session` (total + breakdown par modèle, nombre d'erreurs). Signale les modèles en circuit ouvert ou avec des erreurs répétées.
 
 ---
 

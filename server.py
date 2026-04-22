@@ -19,6 +19,8 @@ import logging
 import os
 import signal
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +99,39 @@ rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token."""
     return len(text) // 4
+
+
+def _now_iso() -> str:
+    """Timestamp UTC au format ISO (sortable lexicographiquement)."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _log_request(
+    *,
+    tool: str,
+    session_id: str | None,
+    model_name: str,
+    response: dict,
+    cost: float,
+    duration_ms: int,
+):
+    """Écrit un évènement dans le journal JSONL (best-effort)."""
+    if budget_manager is None:
+        return
+    model_cfg = provider_manager.models.get(model_name, {}) if provider_manager else {}
+    error = response.get("error") if isinstance(response, dict) else None
+    budget_manager.record_event({
+        "ts": _now_iso(),
+        "session_id": session_id,
+        "tool": tool,
+        "model": model_name,
+        "provider": model_cfg.get("provider"),
+        "input_tokens": response.get("input_tokens") if isinstance(response, dict) else None,
+        "output_tokens": response.get("output_tokens") if isinstance(response, dict) else None,
+        "cost": round(cost, 6),
+        "error": error,
+        "duration_ms": duration_ms,
+    })
 
 
 def _ensure_initialized():
@@ -257,6 +292,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum tokens in response",
                         "default": 1000,
                     },
+                    "session_id": {
+                        "type": ["string", "null"],
+                        "description": "Optional sparring session identifier (for billing aggregation via get_usage / consolidate_usage.py)",
+                        "default": None,
+                    },
                 },
                 "required": ["model", "question"],
             },
@@ -280,6 +320,11 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum tokens in each response",
                         "default": 1000,
+                    },
+                    "session_id": {
+                        "type": ["string", "null"],
+                        "description": "Optional sparring session identifier (for billing aggregation)",
+                        "default": None,
                     },
                 },
                 "required": ["question"],
@@ -325,6 +370,11 @@ The target can be a model response OR file content — just pass the content and
                         "description": "Response language",
                         "default": "fr",
                     },
+                    "session_id": {
+                        "type": ["string", "null"],
+                        "description": "Optional sparring session identifier (for billing aggregation)",
+                        "default": None,
+                    },
                 },
                 "required": ["challenger_model", "original_question", "target_response"],
             },
@@ -347,10 +397,16 @@ The target can be a model response OR file content — just pass the content and
         ),
         Tool(
             name="get_usage",
-            description="Get current budget usage (session, daily, monthly).",
+            description="Get current budget usage (in-memory session, daily, monthly). Pass session_id to get a per-session breakdown aggregated from the journal.",
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "session_id": {
+                        "type": ["string", "null"],
+                        "description": "If provided, returns a per-model breakdown for that sparring session (journal aggregation).",
+                        "default": None,
+                    },
+                },
             },
         ),
         Tool(
@@ -405,7 +461,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "get_lenses":
             result = await handle_get_lenses()
         elif name == "get_usage":
-            result = await handle_get_usage()
+            result = await handle_get_usage(arguments)
         elif name == "estimate_cost":
             result = await handle_estimate_cost(arguments)
         else:
@@ -429,6 +485,7 @@ async def handle_ask_model(args: dict) -> dict:
     question = args["question"]
     context = args.get("context", "")
     max_tokens = args.get("max_tokens", 1000)
+    session_id = args.get("session_id")
 
     # Contexte pricing (model_id/provider/base_url) pour la cascade de lookup
     model_cfg = provider_manager.models.get(model_name, {})
@@ -460,18 +517,30 @@ async def handle_ask_model(args: dict) -> dict:
         }
 
     # Query model
+    t0 = time.monotonic()
     response = await provider_manager.query(model_name, prompt, max_tokens)
+    duration_ms = int((time.monotonic() - t0) * 1000)
 
-    # Track usage
-    actual_cost = 0
-    if "error" not in response:
+    # Track usage (même en cas de réponse vide : le provider a facturé si usage renvoyé)
+    actual_cost = 0.0
+    if response.get("input_tokens") is not None or response.get("output_tokens") is not None:
         actual_cost = budget_manager.estimate_request_cost(
             model_name,
-            response.get("input_tokens", 500),
-            response.get("output_tokens", max_tokens),
+            response.get("input_tokens") or 0,
+            response.get("output_tokens") or 0,
             **pricing_ctx,
         )
-        budget_manager.record_usage(actual_cost)
+        if "error" not in response:
+            budget_manager.record_usage(actual_cost)
+
+    _log_request(
+        tool="ask_model",
+        session_id=session_id,
+        model_name=model_name,
+        response=response,
+        cost=actual_cost,
+        duration_ms=duration_ms,
+    )
 
     return {
         "summary": f"[{model_name} | ${actual_cost:.4f}]",
@@ -482,6 +551,7 @@ async def handle_ask_model(args: dict) -> dict:
             "output": response.get("output_tokens"),
         },
         "cost": actual_cost,
+        "session_id": session_id,
     }
 
 
@@ -491,6 +561,7 @@ async def handle_ask_all(args: dict) -> dict:
     question = args["question"]
     context = args.get("context", "")
     max_tokens = args.get("max_tokens", 1000)
+    session_id = args.get("session_id")
 
     # Build prompt
     prompt = question
@@ -527,44 +598,75 @@ async def handle_ask_all(args: dict) -> dict:
             "models_requested": available_models,
         }
 
-    # Query all models in parallel (with concurrency limit)
+    # Query all models in parallel (with concurrency limit), en mesurant la durée par appel
     max_parallel = provider_manager.settings.get("max_parallel", 3)
     sem = asyncio.Semaphore(max_parallel)
 
     async def bounded_query(model):
         async with sem:
-            return await provider_manager.query(model, prompt, max_tokens)
+            t0 = time.monotonic()
+            resp = await provider_manager.query(model, prompt, max_tokens)
+            return resp, int((time.monotonic() - t0) * 1000)
 
     tasks = [bounded_query(model) for model in available_models]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Process results
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results + log un évènement par modèle
     responses = {}
-    total_cost = 0
-    
-    for model, result in zip(available_models, results):
-        if isinstance(result, Exception):
-            responses[model] = {"error": str(result)}
+    total_cost = 0.0
+    costs_by_model = {}
+
+    for model, item in zip(available_models, raw_results):
+        if isinstance(item, Exception):
+            result = {"error": str(item)}
+            duration_ms = 0
         else:
-            responses[model] = {
-                "response": result.get("content", result.get("error", "No response")),
-                "tokens": {
-                    "input": result.get("input_tokens"),
-                    "output": result.get("output_tokens"),
-                },
-            }
-            if "cost" in result:
-                total_cost += result["cost"]
-    
-    # Track usage
+            result, duration_ms = item
+
+        cfg = provider_manager.models.get(model, {})
+        model_cost = 0.0
+        if result.get("input_tokens") is not None or result.get("output_tokens") is not None:
+            model_cost = budget_manager.estimate_request_cost(
+                model,
+                result.get("input_tokens") or 0,
+                result.get("output_tokens") or 0,
+                model_id=cfg.get("model_id"),
+                provider=cfg.get("provider"),
+                base_url=cfg.get("base_url"),
+            )
+
+        responses[model] = {
+            "response": result.get("content", result.get("error", "No response")),
+            "tokens": {
+                "input": result.get("input_tokens"),
+                "output": result.get("output_tokens"),
+            },
+            "cost": round(model_cost, 6),
+            "error": result.get("error"),
+        }
+
+        if "error" not in result:
+            total_cost += model_cost
+        costs_by_model[model] = model_cost
+
+        _log_request(
+            tool="ask_all",
+            session_id=session_id,
+            model_name=model,
+            response=result,
+            cost=model_cost,
+            duration_ms=duration_ms,
+        )
+
     if total_cost > 0:
         budget_manager.record_usage(total_cost)
-    
+
     return {
         "summary": f"[{len(available_models)} models | ${total_cost:.4f}]",
         "responses": responses,
-        "total_cost": total_cost,
+        "total_cost": round(total_cost, 6),
         "models_queried": len(available_models),
+        "session_id": session_id,
     }
 
 
@@ -577,6 +679,7 @@ async def handle_challenge(args: dict) -> dict:
     target_source = args.get("target_source", "unknown source")
     lens = args.get("lens", None)
     language = args.get("language", "fr")
+    session_id = args.get("session_id")
     lens_warning = None
 
     # Validate lens if provided
@@ -641,18 +744,30 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
         }
 
     # Query challenger
+    t0 = time.monotonic()
     response = await provider_manager.query(challenger, prompt, 1500)
+    duration_ms = int((time.monotonic() - t0) * 1000)
 
-    # Track usage
-    actual_cost = 0
-    if "error" not in response:
+    # Track usage (honore l'usage renvoyé même si le content est vide)
+    actual_cost = 0.0
+    if response.get("input_tokens") is not None or response.get("output_tokens") is not None:
         actual_cost = budget_manager.estimate_request_cost(
             challenger,
-            response.get("input_tokens", 800),
-            response.get("output_tokens", 1500),
+            response.get("input_tokens") or 0,
+            response.get("output_tokens") or 0,
             **pricing_ctx,
         )
-        budget_manager.record_usage(actual_cost)
+        if "error" not in response:
+            budget_manager.record_usage(actual_cost)
+
+    _log_request(
+        tool="challenge",
+        session_id=session_id,
+        model_name=challenger,
+        response=response,
+        cost=actual_cost,
+        duration_ms=duration_ms,
+    )
 
     lens_label = lens or "natural"
     result = {
@@ -663,6 +778,7 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
         "lens_description": LENSES[lens]["description"] if lens else "Natural critique (no lens)",
         "critique": response.get("content", response.get("error", "No response")),
         "cost": actual_cost,
+        "session_id": session_id,
     }
 
     if lens_warning:
@@ -695,8 +811,9 @@ async def handle_get_models() -> dict:
             "status": status,
             "enabled": model.get("enabled", True),
             "pricing": pricing,
+            "breaker": provider_manager.breaker.status(model["name"]),
         })
-    
+
     return {"models": models}
 
 
@@ -709,10 +826,19 @@ async def handle_get_lenses() -> dict:
     }
 
 
-async def handle_get_usage() -> dict:
-    """Handle get_usage tool."""
+async def handle_get_usage(args: dict | None = None) -> dict:
+    """Handle get_usage tool.
+
+    Sans argument : totaux in-memory / daily / monthly.
+    Avec session_id : breakdown par modèle pour cette session (lecture du journal).
+    """
     _ensure_initialized()
-    return budget_manager.get_usage()
+    args = args or {}
+    session_id = args.get("session_id")
+    usage = budget_manager.get_usage()
+    if session_id:
+        usage["sparring_session"] = budget_manager.aggregate_session(session_id)
+    return usage
 
 
 async def handle_estimate_cost(args: dict) -> dict:
