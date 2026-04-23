@@ -4,9 +4,27 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Chargement des clés API via `.env` local, scopé au MCP. README réaligné sur trois options de gestion des secrets.
+Robustesse des providers face aux reasoning models (thinking tokens, content null, `max_completion_tokens`) et suivi facturation par session via journal JSONL.
 
 ## Log
+
+### 2026-04-23
+- Done: Parser OpenAI-compat refait (`providers._parse_openai_compat_response`) — distingue 4 modes d'échec : `truncated before content`, `truncated during reasoning`, `content_filter`, `empty response`. Lit `reasoning_content` (Zhipu/DeepSeek) ET `reasoning` (OpenRouter). Surface `finish_reason`.
+- Done: Fix GPT-5 / o-series — helper `_max_tokens_param` détecte `gpt-5*`/`o1*`/`o3*`/`o4*` sur provider `openai` et envoie `max_completion_tokens` au lieu de `max_tokens` (HTTP 400 avant le fix).
+- Done: Strip inline `<think>...</think>` via `_strip_inline_thinking` + `_postprocess_result` — phi-4 / QwQ / DeepSeek-R1 local remontent content propre. Troncature dans le bloc think détectée comme erreur dédiée.
+- Done: Ollama remonte `done_reason` sous le nom `finish_reason` pour diagnostic unifié.
+- Done: Cascade `max_tokens` : arg utilisateur > `model.default_max_tokens` > `settings.default_max_tokens` > 2000. Hardcodes 1000/1500 retirés. `challenge` expose maintenant un arg `max_tokens` optionnel.
+- Done: MCP responses enrichies d'un champ `meta` (finish_reason, reasoning_len, inline_thinking_len) + flags dans le `summary` (`⚠ length`, `⚠ filter`, `• thinking=N`). `ask_all` ajoute `models_with_errors`.
+- Done: `scripts/probe_providers.py` — envoie un prompt trivial à chaque modèle enabled, dumpe `message_keys`, `finish_reason`, longueurs content vs reasoning, usage. Outil principal de triage.
+- Done: Circuit breaker en mémoire (`providers.CircuitBreaker`, défauts threshold=3 / cooldown=300s) intégré dans `query()`. Détecte content null/vide + erreurs HTTP. Statut exposé via `get_models`.
+- Done: Journal append-only `~/.config/mcp/llm-sparring/usage.jsonl` — une ligne par requête (ts, session_id, tool, model, provider, tokens, cost, error, finish_reason, reasoning_len, inline_thinking_len, duration_ms).
+- Done: `session_id` optionnel sur `ask_model`/`ask_all`/`challenge`. `get_usage(session_id=…)` agrège depuis le journal. Script `scripts/consolidate_usage.py` (modes `--session`, `--day`, `--by-session`, `--by-tool`, `--json`).
+- Done: Fix latent — `ask_all` ne comptait le coût que des modèles Ollama (handlers cloud ne renvoyaient pas `cost`). Désormais cost recalculé par modèle via `estimate_request_cost`.
+- Done: Template `/sparring` mis à jour — étape 0 génère `session_id` (`date +%Y%m%d-%H%M%S`), propagé à chaque appel, reporté dans le debrief.
+- Done: `config.yaml` template documente `default_max_tokens` (par modèle + settings) et `circuit_breaker`.
+- Observé au probe : zai-glm → 462 reasoning_tokens avant réponse visible. Qwen → 598. phi-4 local → `<think>` inline qui déborde à num_predict=200. Gemini 3 → ~190 tokens de thinking invisible.
+- Commits: `5c4c160` (breaker + journal), `c92784a` (parser + probe + cascade). Push master OK.
+- Next: Documenter les nouveaux outils dans README (monitoring/billing, probe, consolidate), suggérer des `default_max_tokens` réalistes par modèle dans la config utilisateur, envisager contrepoids pour les coûts des réponses en erreur (provider facture mais notre budget session ne l'enregistre pas — seul le JSONL l'a).
 
 ### 2026-04-21
 - Done: Ajout `load_dotenv(Path(__file__).parent / ".env")` dans `server.py` avant l'import `providers` — le MCP lit désormais un `.env` à côté du binaire au lieu de dépendre de l'environnement hérité du process parent.

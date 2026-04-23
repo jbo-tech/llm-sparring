@@ -7,9 +7,12 @@ An MCP server that orchestrates sparring sessions between LLMs. Query multiple m
 ## Features
 
 - **Multi-provider**: OpenAI, Anthropic, Google, OpenRouter, Ollama, custom endpoints
-- **Budget control**: Session, daily, and per-request limits with tracking
+- **Reasoning-model aware**: Parser unifié qui gère `reasoning_content`, `reasoning` (OpenRouter), `<think>` inline (phi-4, QwQ), `max_completion_tokens` (GPT-5 / o-series), `finish_reason` exposé au caller
+- **Budget control**: Session, daily, per-request limits + journal append-only avec `session_id` pour consolider a posteriori (par modèle, par sparring)
+- **Circuit breaker**: Désactive automatiquement un provider après N erreurs consécutives (content null, HTTP 5xx, timeout)
 - **Simple primitives**: `ask_model`, `ask_all`, `challenge`, `get_models`, `get_lenses`, `get_usage`, `estimate_cost`
 - **Challenge lenses**: 10 perspectives (devil_advocate, cynical_dev, security, cost, user, scale, simplicity, naive, pragmatist, steelman)
+- **Diagnostic tooling**: `scripts/probe_providers.py` (raw response dump), `scripts/consolidate_usage.py` (agrégation JSONL)
 - **Local-first**: Works with Ollama for free local inference
 
 ## Installation
@@ -123,21 +126,27 @@ ask_model(
   model: "gpt-4o",
   question: "What are the pros/cons of microservices?",
   context: "Building a SaaS product",  # optional
-  max_tokens: 1000  # optional
+  max_tokens: 1000,                    # optional — voir cascade ci-dessous
+  session_id: "20260423-143012"        # optional — pour regrouper la facturation
 )
 ```
 
+`max_tokens` (cascade, du plus fort au plus faible) : arg explicite > `model.default_max_tokens` (config) > `settings.default_max_tokens` > 2000. Raise pour reasoning models (Gemini 3, Qwen, GLM, o-series, phi-4 local).
+
 ### `ask_all`
 
-Query all enabled models in parallel.
+Query all enabled models in parallel. Chaque modèle applique sa propre cascade `max_tokens`.
 
 ```
 ask_all(
   question: "What database should I use for time-series data?",
   context: "IoT project with 10M events/day",  # optional
-  max_tokens: 1000  # optional
+  max_tokens: 1000,                            # optional — override uniforme
+  session_id: "20260423-143012"                # optional
 )
 ```
+
+Retourne un `meta` par modèle avec `finish_reason`, `reasoning_len`, `inline_thinking_len` quand pertinent + un `models_with_errors` au niveau top pour l'orchestrateur.
 
 ### `challenge`
 
@@ -151,7 +160,9 @@ challenge(
   target_response: "PostgreSQL with TimescaleDB because...",
   target_source: "gpt-4o",         # optional: model name, file name, etc.
   lens: "devil_advocate",          # optional: see get_lenses. null = natural critique
-  language: "fr"                   # optional: "fr" (default) or "en"
+  language: "fr",                  # optional: "fr" (default) or "en"
+  max_tokens: 2000,                # optional — même cascade que ask_model
+  session_id: "20260423-143012"    # optional
 )
 ```
 
@@ -172,19 +183,28 @@ get_models()
       "model_id": "gpt-4o",
       "status": "available",
       "enabled": true,
-      "pricing": {"input": 2.50, "output": 10.00}
+      "pricing": {"input": 2.50, "output": 10.00},
+      "breaker": {"errors": 0, "disabled": false}
     },
     {
-      "name": "llama-local",
-      "provider": "ollama",
-      "model_id": "llama3.2",
+      "name": "or-zai-glm",
+      "provider": "openrouter",
+      "model_id": "z-ai/glm-4.6",
       "status": "available",
       "enabled": true,
-      "pricing": {"input": 0, "output": 0}
+      "pricing": {"input": 0.5, "output": 2.0},
+      "breaker": {
+        "errors": 3,
+        "disabled": true,
+        "disabled_until": 1745421012.5,
+        "last_error": "truncated during reasoning (finish=length, reasoning_len=693)"
+      }
     }
   ]
 }
 ```
+
+Le champ `breaker` reflète l'état du circuit breaker : `disabled: true` signifie que le modèle a échoué ≥ `threshold` fois consécutivement et est mis au frigo jusqu'à `disabled_until`.
 
 ### `get_lenses`
 
@@ -198,17 +218,28 @@ Returns the 10 built-in lenses (`devil_advocate`, `steelman`, `pragmatist`, `cyn
 
 ### `get_usage`
 
-Get current budget usage.
+Get current budget usage. Sans arg : totaux session (in-memory) / daily / monthly. Avec `session_id` : breakdown par modèle agrégé depuis le journal JSONL.
 
 ```
 get_usage()
+get_usage(session_id: "20260423-143012")
 ```
 
 ```json
 {
   "session": {"cost": 0.05, "requests": 3, "limit": 1.00, "remaining": 0.95},
   "daily": {"cost": 0.25, "requests": 12, "limit": 5.00, "remaining": 4.75},
-  "monthly": {"cost": 3.50, "requests": 156}
+  "monthly": {"cost": 3.50, "requests": 156},
+  "sparring_session": {
+    "session_id": "20260423-143012",
+    "total_cost": 0.0172,
+    "requests": 3,
+    "errors": 1,
+    "by_model": {
+      "gpt-4o":   {"cost": 0.017,  "requests": 2, "errors": 0, "input_tokens": 400, "output_tokens": 600},
+      "or-zai-glm": {"cost": 0.0002, "requests": 1, "errors": 1, "input_tokens": 100, "output_tokens": 0}
+    }
+  }
 }
 ```
 
@@ -235,11 +266,40 @@ models:
     model_id: "gpt-4o"
     enabled: true
 
+  - name: "or-zai-glm"
+    provider: "openrouter"
+    model_id: "z-ai/glm-4.6"
+    default_max_tokens: 4000   # reasoning model — besoin de marge pour thinking
+    enabled: true
+
   - name: "llama-local"
     provider: "ollama"
     model_id: "llama3.2"
     base_url: "http://localhost:11434"
     enabled: true
+```
+
+**`default_max_tokens`** (optionnel) — budget tokens par défaut pour ce modèle. À relever pour les reasoning models qui consomment 100-600 tokens invisibles en thinking avant de produire du texte :
+
+| Modèle | Suggéré | Pourquoi |
+|--------|---------|----------|
+| Gemini 2.5/3 Flash/Pro | 6000 | ~190 tokens thinking invisible même sur prompt trivial |
+| GPT-5 / o-series | 4000 | reasoning_tokens comptés dans completion_tokens |
+| GLM-4.6 / Qwen thinking | 4000 | 200-600 reasoning tokens avant réponse |
+| phi-4 / QwQ / DeepSeek-R1 local | 8000 | `<think>` inline exposé dans content |
+| Modèles standards (gpt-4o, mistral, claude) | — (fallback settings) | pas de thinking invisible |
+
+### Settings
+
+```yaml
+settings:
+  default_timeout: 30          # secondes
+  max_parallel: 3              # concurrence ask_all
+  default_max_tokens: 2000     # fallback global — voir cascade plus haut
+
+  circuit_breaker:             # optionnel, défauts indiqués
+    threshold: 3               # erreurs consécutives avant désactivation
+    cooldown_seconds: 300      # durée de mise au frigo
 ```
 
 ### Providers
@@ -276,7 +336,13 @@ budget:
   session_limit: 1.00      # Max per session
   daily_limit: 5.00        # Max per day
   tracking_file: "~/.config/mcp/llm-sparring/usage.json"
+  journal_file: "~/.config/mcp/llm-sparring/usage.jsonl"  # optionnel, défaut à côté de tracking_file
 ```
+
+Deux fichiers sont maintenus en parallèle :
+
+- **`usage.json`** — totaux agrégés par session (in-memory), jour, mois. Source pour les checks de budget en temps réel.
+- **`usage.jsonl`** — journal append-only, une ligne par requête : `ts`, `session_id`, `tool`, `model`, `provider`, `input_tokens`, `output_tokens`, `cost`, `error`, `finish_reason`, `reasoning_len`, `inline_thinking_len`, `duration_ms`. Source de vérité pour l'audit rétro et la consolidation par session.
 
 ### Pricing
 
@@ -297,6 +363,60 @@ pricing:
     input: 0.50    # per 1M tokens
     output: 1.50
 ```
+
+## Monitoring & billing
+
+### Agrégation par session
+
+L'orchestrateur (`/sparring`) génère un `session_id` unique par sparring et le propage à chaque appel d'outil. Deux moyens de consolider :
+
+**Depuis Claude Code (in-line)** :
+```
+get_usage(session_id: "20260423-143012")
+```
+→ retourne `sparring_session.by_model` avec coût, erreurs, tokens par modèle.
+
+**Hors-ligne (script)** :
+```bash
+# Détail d'une session
+uv run scripts/consolidate_usage.py --session 20260423-143012
+
+# Top sessions de la journée par coût
+uv run scripts/consolidate_usage.py --day 2026-04-23 --by-session
+
+# Breakdown par outil (ask_model / ask_all / challenge)
+uv run scripts/consolidate_usage.py --by-tool
+
+# Dump JSON pour traitement externe
+uv run scripts/consolidate_usage.py --json | jq '.by_model'
+```
+
+Par défaut, lit `~/.config/mcp/llm-sparring/usage.jsonl` ; `--file <path>` pour un autre chemin.
+
+## Diagnosing providers
+
+Un modèle qui renvoie systématiquement vide, tronqué ou "circuit breaker open" ? `scripts/probe_providers.py` envoie un prompt trivial et dumpe le raw response pour identifier la cause :
+
+```bash
+# Triage complet sur tous les modèles enabled
+uv run scripts/probe_providers.py
+
+# Zoom sur un modèle spécifique
+uv run scripts/probe_providers.py --model or-zai-glm --max-tokens 2000
+
+# JSON brut pour analyse
+uv run scripts/probe_providers.py --json > /tmp/probe.json
+```
+
+Cartographie des signaux :
+
+| Symptôme | Colonne à vérifier | Action |
+|----------|-------------------|--------|
+| `content_len=0` + `reasoning_len>0` | reasoning-only response | Monter `default_max_tokens` pour ce modèle |
+| `finish_reason=length` + `content_len<50` | thinking tokens épuisent le budget | Idem — 4000-8000 pour reasoning models |
+| `finish_reason=content_filter` | modération provider | Reformuler le prompt |
+| `HTTP 400 max_tokens unsupported` | GPT-5 / o-series | Déjà géré automatiquement (helper `_max_tokens_param`) |
+| `<think>` dans `content_preview` | reasoning model local | Strip automatique, vérifier qu'il y a un `</think>` |
 
 ## Usage with /sparring
 
@@ -405,6 +525,14 @@ This runs the full orchestration flow (framing, ask_all, challenge, synthesis).
 - Check with `get_usage`
 - Adjust limits in config
 - Wait for daily reset (midnight)
+
+### Réponse vide, tronquée, ou `circuit breaker open`
+
+Trois causes fréquentes sur les reasoning models (Gemini 3, GPT-5, o-series, GLM, Qwen thinking, phi-4 local) :
+
+1. **`max_tokens` trop bas** — les thinking tokens invisibles consomment le budget avant que le modèle ne produise du texte. Relever `default_max_tokens` pour ce modèle (voir table dans la section Configuration).
+2. **Champ reasoning mal routé** — Zhipu met la réponse dans `reasoning_content`, OpenRouter dans `reasoning`, phi-4 local dans `<think>` inline. Le parser gère les trois automatiquement ; si ça casse, lancer `scripts/probe_providers.py --model <name>` pour confirmer le format.
+3. **Circuit breaker ouvert** — après 3 erreurs consécutives le modèle est mis au frigo 5 min. Vérifier `get_models()` → champ `breaker`. Le compteur se remet à zéro au premier succès ou au redémarrage du serveur.
 
 ## Development
 

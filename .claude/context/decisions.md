@@ -97,3 +97,31 @@ Technical decisions and their context. Added via `/retro`.
 **Tradeoff**: Refresh manuel requis (~1×/trimestre). Les modèles dépréciés non listés par LiteLLM tombent en fallback warning-loggé — l'utilisateur doit soit passer à un modèle récent, soit ajouter un override dans la section `pricing` de `config.yaml`.
 **Alternatives considered**: Dépendance runtime `litellm` (rejeté : overhead mémoire/startup, API unstable, incompatible KISS), maintenir manuellement (status quo, non viable long terme), loader le JSON runtime depuis GitHub (ajoute un appel réseau au boot + point de panne).
 **Date**: 2026-04-15
+
+### Circuit breaker en mémoire, pas persisté
+**Decision**: Compteur d'erreurs par modèle dans un dict en mémoire de `ProviderManager`. Ouvre après 3 erreurs consécutives (défaut), cooldown 300s. Configurable via `settings.circuit_breaker`. Redémarrage du serveur = remise à zéro.
+**Context**: Un provider qui renvoie `content: null` ou 5xx en série fait exploser les coûts (chaque essai est facturé) et bloque le sparring. Besoin d'un fusible rapide, pas d'une machinerie distribuée.
+**Alternatives considered**: Persistance dans `usage.json` (complexifie le state, besoin reset manuel après incident provider), fenêtre glissante temporelle (plus précis mais plus de code), `pybreaker` (overkill pour un MCP mono-user).
+**Tradeoff**: Un crash du serveur efface la mémoire d'ouverture — au pire 3 requêtes supplémentaires échouent avant réouverture.
+**Date**: 2026-04-22
+
+### Facturation par session : journal JSONL + session_id opt-in
+**Decision**: Append-only `usage.jsonl` en parallèle du `usage.json` existant — une ligne par requête (ts, session_id, tool, model, tokens, cost, error, finish_reason, reasoning_len, inline_thinking_len, duration_ms). `session_id` optionnel sur les trois outils de requête, propagé par l'orchestrateur (pas auto-généré côté serveur). Agrégation à la demande via `get_usage(session_id=...)` ou `scripts/consolidate_usage.py`.
+**Context**: `usage.json` donnait seulement total session / daily / monthly. Impossible de savoir où partait l'argent par modèle, par lens, par sparring. Besoin d'un audit rétro pour debug et calibrage des `default_max_tokens`.
+**Alternatives considered**: (A) Tout dans `usage.json` avec `sessions: {id: {...}}` — trop lourd, lecture/écriture du fichier entier à chaque requête. (B) `session_id` auto-généré si absent — casse l'intention de l'orchestrateur qui veut regrouper plusieurs appels. (C) SQLite — complexité sans justification pour ce volume.
+**Tradeoff**: Le JSONL peut gonfler (~300 octets/ligne × N requêtes), pas de rotation pour l'instant. Les erreurs sont loguées avec `cost=0` côté budget session alors que le provider a facturé — seul le JSONL reflète la réalité comptable complète. À revisiter si l'écart devient sensible.
+**Date**: 2026-04-22
+
+### Parser OpenAI-compat unifié avec 4 modes d'échec
+**Decision**: Fonction `_parse_openai_compat_response(data)` qui encapsule toute l'interprétation d'une réponse : lit `content` + `reasoning_content` + `reasoning`, surface `finish_reason` systématiquement, et distingue explicitement `truncated before content` / `truncated during reasoning` / `content_filter` / `empty response`. Appliquée à tous les providers OpenAI-compat sans branchement per-provider. Post-traitement commun `_postprocess_result` pour strip des `<think>` inline.
+**Context**: Les formats de réponse divergent silencieusement entre providers (Zhipu met le raisonnement dans `reasoning_content`, OpenRouter dans `reasoning`, phi-4 local dans `<think>...</think>` inline). Sans diagnostic précis, impossible pour l'orchestrateur de savoir s'il faut relever `max_tokens`, changer de modèle, ou désactiver le thinking.
+**Alternatives considered**: (A) Branchements per-provider dans `query()` — explosion combinatoire. (B) Lire seulement `content`, ignorer le reste — status quo qui jetait la moitié des réponses. (C) Tout renvoyer brut à l'orchestrateur — charge de parsing côté Claude Code, pas robuste.
+**Consequences**: Journal JSONL enrichi (`finish_reason` / `reasoning_len` / `inline_thinking_len`) pour analyse offline. `scripts/probe_providers.py` devient l'outil de référence quand un nouveau provider apparaît ou se comporte bizarrement.
+**Date**: 2026-04-23
+
+### Cascade `max_tokens` par modèle (arg > model > settings > hard)
+**Decision**: Résolution via `_resolve_max_tokens(model, user_value)` : arg explicite > `model.default_max_tokens` (config) > `settings.default_max_tokens` > `HARD_DEFAULT_MAX_TOKENS = 2000`. `challenge` expose maintenant un arg `max_tokens` (hardcodé à 1500 jusqu'ici). `ask_all` résout par modèle — chaque modèle peut avoir son propre défaut.
+**Context**: Les reasoning models (Gemini 3, Qwen, GLM, phi-4 local) consomment 100-600 tokens en thinking invisible. Un défaut global de 1000-1500 les tronque systématiquement. Un défaut global de 8000 serait gaspilleur sur gpt-4o-mini et inflaterait les estimations de budget.
+**Alternatives considered**: (A) Défaut global généreux (4000) — fausse les estimations pré-flight. (B) Détection automatique par famille — fragile, modèles "thinking" pas toujours reconnaissables via l'id. (C) Toujours exiger l'arg de l'appelant — API pénible, pousse les valeurs dans chaque call site.
+**Tradeoff**: L'utilisateur doit configurer `default_max_tokens` manuellement pour chaque reasoning model ajouté. Documenté dans `config.yaml` template.
+**Date**: 2026-04-23
