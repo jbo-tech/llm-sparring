@@ -15,6 +15,7 @@ Supported providers:
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -27,6 +28,150 @@ DEFAULT_TIMEOUT = 30
 # Défauts du circuit breaker (surchargés via settings.circuit_breaker)
 DEFAULT_BREAKER_THRESHOLD = 3
 DEFAULT_BREAKER_COOLDOWN = 300  # secondes
+
+# Familles OpenAI reasoning qui rejettent `max_tokens` et exigent
+# `max_completion_tokens` (observé sur gpt-5*, o1*, o3*, o4*).
+_OPENAI_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _max_tokens_param(model_id: str, provider: str) -> str:
+    """Retourne le nom du param budget tokens à envoyer pour ce modèle."""
+    if provider == "openai" and any(model_id.startswith(p) for p in _OPENAI_REASONING_PREFIXES):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _parse_openai_compat_response(data: dict) -> dict:
+    """Parse une réponse OpenAI-compat et distingue les modes d'échec.
+
+    Gère plusieurs cas observés sur des modèles reasoning :
+    - `content` vide mais `reasoning_content` (Zhipu, DeepSeek) ou `reasoning`
+      (OpenRouter) rempli → le modèle a réfléchi sans jamais répondre.
+    - `finish_reason=length` → budget tokens épuisé (thinking tokens inclus
+      chez Gemini 2.5/3, o-series, etc.).
+    - `finish_reason=content_filter` → bloqué par la modération.
+    """
+    usage = data.get("usage") or {}
+    input_tokens = usage.get("prompt_tokens")
+    output_tokens = usage.get("completion_tokens")
+
+    choices = data.get("choices") or []
+    if not choices:
+        return {
+            "error": "no choices in response",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+
+    choice = choices[0]
+    message = choice.get("message") or {}
+    finish_reason = choice.get("finish_reason")
+    content = message.get("content")
+    # Nom du champ reasoning varie : `reasoning_content` (Zhipu direct,
+    # DeepSeek) vs `reasoning` (OpenRouter, parfois xAI).
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+
+    base = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "finish_reason": finish_reason,
+    }
+    if reasoning:
+        base["reasoning_len"] = len(reasoning)
+
+    if content and content.strip():
+        base["content"] = content
+        return base
+
+    # Content vide : distinguer les causes pour un diagnostic précis.
+    if finish_reason == "length":
+        if reasoning:
+            base["error"] = (
+                f"truncated during reasoning (finish=length, reasoning_len={len(reasoning)}) "
+                "— raise max_tokens or disable thinking"
+            )
+        else:
+            base["error"] = "truncated before content (finish=length) — raise max_tokens"
+    elif finish_reason == "content_filter":
+        base["error"] = "blocked by content filter (finish=content_filter)"
+    elif reasoning:
+        base["error"] = (
+            f"empty content, reasoning-only response (finish={finish_reason}, "
+            f"reasoning_len={len(reasoning)}) — reasoning model did not emit final answer"
+        )
+    else:
+        base["error"] = f"empty response (finish={finish_reason}, message_keys={sorted(message.keys())})"
+
+    return base
+
+
+# Certains modèles (phi-4, QwQ, DeepSeek-R1 local…) exposent leur raisonnement
+# en clair dans le content sous forme de balises <think>...</think> au lieu
+# d'un champ reasoning_content séparé. On retire ce bloc pour ne garder que
+# la réponse finale — et on détecte la troncature « in the middle of thinking »
+# (pas de balise fermante) comme une erreur dédiée.
+_THINK_BLOCK_RE = re.compile(r"^\s*<think>(.*?)</think>\s*", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"^\s*<think>", re.IGNORECASE)
+
+
+def _strip_inline_thinking(content: str) -> tuple[str, int | None, bool]:
+    """Retire un bloc <think>...</think> en tête de content.
+
+    Retourne (cleaned, thinking_len, truncated_in_thinking) :
+    - pas de balise <think> → (content, None, False)
+    - balise ouverte + fermée → (reste après </think>, len du bloc stripé, False)
+    - balise ouverte SANS fermeture → ("", len(content), True)
+      (le modèle a épuisé max_tokens avant de sortir du think)
+    """
+    if not content:
+        return content, None, False
+
+    match = _THINK_BLOCK_RE.match(content)
+    if match:
+        stripped = content[match.end():]
+        return stripped, match.end(), False
+
+    if _THINK_OPEN_RE.match(content):
+        return "", len(content), True
+
+    return content, None, False
+
+
+def _postprocess_result(result: dict) -> dict:
+    """Post-traitement commun aux handlers après succès.
+
+    Pour l'instant : strip des balises <think>...</think> inline. Convertit
+    en erreur si la réponse était tronquée dans le bloc thinking.
+    """
+    if "error" in result:
+        return result
+    content = result.get("content")
+    if not content:
+        return result
+
+    cleaned, thinking_len, truncated = _strip_inline_thinking(content)
+
+    if truncated:
+        new = {k: v for k, v in result.items() if k != "content"}
+        new["error"] = (
+            f"truncated during inline thinking (<think> without </think>, "
+            f"thinking_len={thinking_len}) — raise max_tokens"
+        )
+        new["inline_thinking_len"] = thinking_len
+        return new
+
+    if thinking_len is not None:
+        result["content"] = cleaned
+        result["inline_thinking_len"] = thinking_len
+        if not cleaned.strip():
+            new = {k: v for k, v in result.items() if k != "content"}
+            new["error"] = (
+                f"inline thinking block present but empty final answer "
+                f"(thinking_len={thinking_len})"
+            )
+            return new
+
+    return result
 
 
 class CircuitBreaker:
@@ -303,15 +448,20 @@ class ProviderManager:
             self.breaker.record_error(model_name, str(e)[:200])
             return {"error": str(e)}
 
-        # Validation post-appel : un 200 peut cacher un content null/vide
-        # (observé sur zai-glm — provider facture mais renvoie rien).
+        # Post-traitement commun (strip <think> inline, etc.). Peut convertir
+        # un succès apparent en erreur (cas : tronqué dans le think).
+        result = _postprocess_result(result)
+
+        # Le parser + postprocess renvoient déjà `error` pour les réponses
+        # vides/tronquées/filtrées. On se contente d'alimenter le breaker.
         if "error" in result:
             self.breaker.record_error(model_name, result["error"])
             return result
 
         content = result.get("content")
         if not content or not str(content).strip():
-            self.breaker.record_error(model_name, "empty response")
+            # Filet de sécurité — ne devrait plus arriver après le parser.
+            self.breaker.record_error(model_name, "empty response (safety net)")
             return {
                 "error": "empty response",
                 "input_tokens": result.get("input_tokens"),
@@ -367,13 +517,14 @@ class ProviderManager:
         if provider_config.get("extra_headers"):
             headers.update(provider_config["extra_headers"])
         
-        # Build request
+        # Build request — certains modèles (gpt-5*, o-series) n'acceptent que max_completion_tokens
+        token_param = _max_tokens_param(model["model_id"], provider)
         request_body = {
             "model": model["model_id"],
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
+            token_param: max_tokens,
         }
-        
+
         # Make request
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
@@ -383,13 +534,8 @@ class ProviderManager:
             )
             response.raise_for_status()
             data = response.json()
-        
-        # Parse response (standard OpenAI format)
-        return {
-            "content": data["choices"][0]["message"]["content"],
-            "input_tokens": data.get("usage", {}).get("prompt_tokens"),
-            "output_tokens": data.get("usage", {}).get("completion_tokens"),
-        }
+
+        return _parse_openai_compat_response(data)
     
     # =========================================================================
     # Ollama Handler (slightly different from OpenAI)
@@ -424,9 +570,19 @@ class ProviderManager:
             response.raise_for_status()
             data = response.json()
         
-        return {
-            "content": data["message"]["content"],
+        # done_reason Ollama : "stop" | "length" (num_predict épuisé) | "load" | ...
+        # On l'aligne sur `finish_reason` OpenAI-compat pour un diagnostic unifié.
+        message = data.get("message") or {}
+        content = message.get("content")
+        finish_reason = data.get("done_reason")
+        result = {
+            "content": content,
             "input_tokens": data.get("prompt_eval_count"),
             "output_tokens": data.get("eval_count"),
+            "finish_reason": finish_reason,
             "cost": 0,  # Local models are free
         }
+        if not content or not content.strip():
+            result.pop("content", None)
+            result["error"] = f"empty response from ollama (done_reason={finish_reason})"
+        return result

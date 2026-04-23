@@ -67,6 +67,11 @@ MAX_PROMPT_CHARS = 50000
 RATE_LIMIT_REQUESTS = 30  # Max requêtes par fenêtre
 RATE_LIMIT_WINDOW = 60  # Fenêtre en secondes
 
+# Dernier recours si ni le modèle ni les settings ne définissent un budget tokens.
+# Choisi large pour laisser de la marge aux reasoning models (qwen, glm, o-series
+# consomment 200-600 tokens en thinking avant de produire du texte visible).
+HARD_DEFAULT_MAX_TOKENS = 2000
+
 
 class RateLimiter:
     """Rate limiter simple avec fenêtre glissante."""
@@ -106,6 +111,61 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _response_meta(response: dict) -> dict:
+    """Extrait les champs de diagnostic utiles à l'orchestrateur.
+
+    Retourne seulement les clés non-nulles (moins de bruit dans le JSON MCP).
+    """
+    if not isinstance(response, dict):
+        return {}
+    meta = {}
+    for key in ("finish_reason", "reasoning_len", "inline_thinking_len"):
+        val = response.get(key)
+        if val is not None:
+            meta[key] = val
+    return meta
+
+
+def _summary_flags(response: dict) -> str:
+    """Tags courts pour le `summary`: alerte l'orchestrateur en un coup d'oeil.
+
+    Exemples : `⚠ length`, `⚠ filter`, `• thinking=462`.
+    """
+    if not isinstance(response, dict):
+        return ""
+    flags: list[str] = []
+    fr = response.get("finish_reason")
+    if fr == "length":
+        flags.append("⚠ length")
+    elif fr == "content_filter":
+        flags.append("⚠ filter")
+    thinking = response.get("reasoning_len") or response.get("inline_thinking_len")
+    if thinking:
+        flags.append(f"• thinking={thinking}")
+    return " | " + " ".join(flags) if flags else ""
+
+
+def _resolve_max_tokens(model_name: str, user_value: int | None) -> int:
+    """Cascade : valeur utilisateur → default par modèle → default settings → HARD_DEFAULT.
+
+    Les reasoning models (gemini-3, qwen, glm-4.6…) consomment beaucoup de tokens
+    invisibles ; un `default_max_tokens` par modèle permet de leur donner de la
+    marge sans pénaliser les modèles non-thinking.
+    """
+    if user_value is not None:
+        return user_value
+    if provider_manager is None or budget_manager is None:
+        return HARD_DEFAULT_MAX_TOKENS
+    model_cfg = provider_manager.models.get(model_name, {})
+    per_model = model_cfg.get("default_max_tokens")
+    if per_model:
+        return per_model
+    per_settings = provider_manager.settings.get("default_max_tokens")
+    if per_settings:
+        return per_settings
+    return HARD_DEFAULT_MAX_TOKENS
+
+
 def _log_request(
     *,
     tool: str,
@@ -128,6 +188,9 @@ def _log_request(
         "provider": model_cfg.get("provider"),
         "input_tokens": response.get("input_tokens") if isinstance(response, dict) else None,
         "output_tokens": response.get("output_tokens") if isinstance(response, dict) else None,
+        "finish_reason": response.get("finish_reason") if isinstance(response, dict) else None,
+        "reasoning_len": response.get("reasoning_len") if isinstance(response, dict) else None,
+        "inline_thinking_len": response.get("inline_thinking_len") if isinstance(response, dict) else None,
         "cost": round(cost, 6),
         "error": error,
         "duration_ms": duration_ms,
@@ -289,8 +352,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "max_tokens": {
                         "type": "integer",
-                        "description": "Maximum tokens in response",
-                        "default": 1000,
+                        "description": "Maximum tokens in response. If omitted, uses the model's default_max_tokens (config), then settings.default_max_tokens, then 2000. Raise for reasoning models (gemini-3, qwen, glm, o-series).",
                     },
                     "session_id": {
                         "type": ["string", "null"],
@@ -318,8 +380,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "max_tokens": {
                         "type": "integer",
-                        "description": "Maximum tokens in each response",
-                        "default": 1000,
+                        "description": "Maximum tokens per response. If omitted, each model uses its own default_max_tokens (config) before falling back to settings.default_max_tokens / 2000.",
                     },
                     "session_id": {
                         "type": ["string", "null"],
@@ -369,6 +430,10 @@ The target can be a model response OR file content — just pass the content and
                         "enum": ["fr", "en"],
                         "description": "Response language",
                         "default": "fr",
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Maximum tokens for the critique. If omitted, uses the challenger's default_max_tokens (config), then settings.default_max_tokens, then 2000.",
                     },
                     "session_id": {
                         "type": ["string", "null"],
@@ -484,7 +549,7 @@ async def handle_ask_model(args: dict) -> dict:
     model_name = args["model"]
     question = args["question"]
     context = args.get("context", "")
-    max_tokens = args.get("max_tokens", 1000)
+    max_tokens = _resolve_max_tokens(model_name, args.get("max_tokens"))
     session_id = args.get("session_id")
 
     # Contexte pricing (model_id/provider/base_url) pour la cascade de lookup
@@ -543,13 +608,14 @@ async def handle_ask_model(args: dict) -> dict:
     )
 
     return {
-        "summary": f"[{model_name} | ${actual_cost:.4f}]",
+        "summary": f"[{model_name} | ${actual_cost:.4f}{_summary_flags(response)}]",
         "model": model_name,
         "response": response.get("content", response.get("error", "No response")),
         "tokens": {
             "input": response.get("input_tokens"),
             "output": response.get("output_tokens"),
         },
+        "meta": _response_meta(response),
         "cost": actual_cost,
         "session_id": session_id,
     }
@@ -560,7 +626,7 @@ async def handle_ask_all(args: dict) -> dict:
     _ensure_initialized()
     question = args["question"]
     context = args.get("context", "")
-    max_tokens = args.get("max_tokens", 1000)
+    user_max_tokens = args.get("max_tokens")  # None = résoudre par modèle
     session_id = args.get("session_id")
 
     # Build prompt
@@ -577,13 +643,18 @@ async def handle_ask_all(args: dict) -> dict:
     if not available_models:
         return {"error": "No models available"}
 
+    # Résolution par modèle (chaque modèle peut avoir son propre budget par défaut)
+    max_tokens_by_model = {
+        m: _resolve_max_tokens(m, user_max_tokens) for m in available_models
+    }
+
     # Estimate total cost
     estimated_input = _estimate_tokens(prompt)
     total_estimate = 0.0
     for m in available_models:
         cfg = provider_manager.models.get(m, {})
         total_estimate += budget_manager.estimate_request_cost(
-            m, estimated_input, max_tokens,
+            m, estimated_input, max_tokens_by_model[m],
             model_id=cfg.get("model_id"),
             provider=cfg.get("provider"),
             base_url=cfg.get("base_url"),
@@ -605,7 +676,7 @@ async def handle_ask_all(args: dict) -> dict:
     async def bounded_query(model):
         async with sem:
             t0 = time.monotonic()
-            resp = await provider_manager.query(model, prompt, max_tokens)
+            resp = await provider_manager.query(model, prompt, max_tokens_by_model[model])
             return resp, int((time.monotonic() - t0) * 1000)
 
     tasks = [bounded_query(model) for model in available_models]
@@ -641,6 +712,7 @@ async def handle_ask_all(args: dict) -> dict:
                 "input": result.get("input_tokens"),
                 "output": result.get("output_tokens"),
             },
+            "meta": _response_meta(result),
             "cost": round(model_cost, 6),
             "error": result.get("error"),
         }
@@ -661,11 +733,22 @@ async def handle_ask_all(args: dict) -> dict:
     if total_cost > 0:
         budget_manager.record_usage(total_cost)
 
+    # Compte rapide des modèles en erreur / tronqués pour l'orchestrateur
+    errors = sum(1 for r in responses.values() if r.get("error"))
+    truncated = sum(1 for r in responses.values() if r.get("meta", {}).get("finish_reason") == "length")
+    summary_extra = []
+    if errors:
+        summary_extra.append(f"⚠ {errors} error{'s' if errors > 1 else ''}")
+    if truncated:
+        summary_extra.append(f"⚠ {truncated} truncated")
+    suffix = (" | " + " ".join(summary_extra)) if summary_extra else ""
+
     return {
-        "summary": f"[{len(available_models)} models | ${total_cost:.4f}]",
+        "summary": f"[{len(available_models)} models | ${total_cost:.4f}{suffix}]",
         "responses": responses,
         "total_cost": round(total_cost, 6),
         "models_queried": len(available_models),
+        "models_with_errors": errors,
         "session_id": session_id,
     }
 
@@ -679,6 +762,7 @@ async def handle_challenge(args: dict) -> dict:
     target_source = args.get("target_source", "unknown source")
     lens = args.get("lens", None)
     language = args.get("language", "fr")
+    max_tokens = _resolve_max_tokens(challenger, args.get("max_tokens"))
     session_id = args.get("session_id")
     lens_warning = None
 
@@ -733,7 +817,7 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
 
     # Check budget
     estimated_input = _estimate_tokens(prompt)
-    cost_estimate = budget_manager.estimate_request_cost(challenger, estimated_input, 1500, **pricing_ctx)
+    cost_estimate = budget_manager.estimate_request_cost(challenger, estimated_input, max_tokens, **pricing_ctx)
     budget_check = budget_manager.check_budget(cost_estimate)
 
     if not budget_check["allowed"]:
@@ -745,7 +829,7 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
 
     # Query challenger
     t0 = time.monotonic()
-    response = await provider_manager.query(challenger, prompt, 1500)
+    response = await provider_manager.query(challenger, prompt, max_tokens)
     duration_ms = int((time.monotonic() - t0) * 1000)
 
     # Track usage (honore l'usage renvoyé même si le content est vide)
@@ -771,12 +855,13 @@ Sois constructif mais rigoureux. Si tu es en désaccord, explique pourquoi."""
 
     lens_label = lens or "natural"
     result = {
-        "summary": f"[{challenger} | {lens_label} | ${actual_cost:.4f}]",
+        "summary": f"[{challenger} | {lens_label} | ${actual_cost:.4f}{_summary_flags(response)}]",
         "challenger": challenger,
         "target_source": target_source,
         "lens": lens,
         "lens_description": LENSES[lens]["description"] if lens else "Natural critique (no lens)",
         "critique": response.get("content", response.get("error", "No response")),
+        "meta": _response_meta(response),
         "cost": actual_cost,
         "session_id": session_id,
     }

@@ -22,6 +22,11 @@
 #   - ollama      → http://localhost:11434 (dedicated handler)
 
 models:
+  # Champs optionnels par modèle :
+  #   default_max_tokens: 4000    # override global — utile pour reasoning models
+  #   api_key: "..."              # override la clé d'env (provider=custom)
+  #   base_url: "..."             # override l'endpoint du provider
+
   # ===========================================================================
   # OpenAI
   # ===========================================================================
@@ -29,11 +34,21 @@ models:
     provider: "openai"
     model_id: "gpt-4o"
     enabled: true
-    
+
   - name: "gpt-4o-mini"
     provider: "openai"
     model_id: "gpt-4o-mini"
     enabled: true
+
+  # gpt-5* et o-series utilisent automatiquement `max_completion_tokens` au
+  # lieu de `max_tokens` (détection par préfixe dans providers.py).
+  # Ils peuvent aussi consommer des reasoning_tokens invisibles — monter
+  # default_max_tokens si besoin.
+  # - name: "gpt-5-mini"
+  #   provider: "openai"
+  #   model_id: "gpt-5-mini"
+  #   default_max_tokens: 4000
+  #   enabled: true
 
   # ===========================================================================
   # Google Gemini
@@ -179,10 +194,21 @@ settings:
   # Timeout for API calls (seconds)
   # Increase for slower models or high latency
   default_timeout: 30
-  
+
   # Maximum parallel requests
   # Lower this if you hit rate limits
   max_parallel: 3
+
+  # Budget tokens par défaut si ni l'appelant ni le modèle n'en fournissent.
+  # Hard fallback interne = 2000. Monter si tu utilises surtout des reasoning
+  # models (qwen, glm, o-series consomment 200-600 tokens en thinking invisible).
+  # default_max_tokens: 2000
+
+  # Circuit breaker (désactive un modèle après N erreurs consécutives).
+  # Défauts : threshold=3, cooldown_seconds=300.
+  # circuit_breaker:
+  #   threshold: 3
+  #   cooldown_seconds: 300
 
 
 # =============================================================================
