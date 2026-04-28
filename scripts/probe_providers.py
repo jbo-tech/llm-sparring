@@ -11,6 +11,8 @@ Usage:
   python scripts/probe_providers.py --prompt "..."   # prompt custom
   python scripts/probe_providers.py --max-tokens 50  # forcer la troncature
   python scripts/probe_providers.py --json           # sortie JSON brute
+  python scripts/probe_providers.py --model deepseek --sweep 500,1000,2000,4000,8000
+                                                     # boucle pour trouver le seuil utile
 
 Ne passe PAS par ProviderManager.query() (qui cache le raw). Duplique le
 minimum nécessaire pour matcher le comportement de providers.py.
@@ -211,12 +213,54 @@ def print_human(summaries: list[dict]):
             print(f"  error={s['error']}")
 
 
+def parse_sweep(raw: str) -> list[int]:
+    """Parse '500,1000,2000' en liste d'entiers triés."""
+    try:
+        values = sorted({int(x.strip()) for x in raw.split(",") if x.strip()})
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"--sweep doit être une liste d'entiers séparés par virgule: {e}")
+    if not values:
+        raise argparse.ArgumentTypeError("--sweep est vide")
+    return values
+
+
+async def run_sweep(model: dict, prompt: str, values: list[int]) -> int:
+    """Boucle sur plusieurs max_tokens pour identifier le seuil utile."""
+    print(f"Sweep sur '{model['name']}' ({model['provider']}/{model['model_id']})", file=sys.stderr)
+    print(f"Prompt: {prompt!r} | valeurs: {values}\n", file=sys.stderr)
+
+    results = await asyncio.gather(*(probe(model, prompt, n) for n in values))
+    summaries = [summarize(r) for r in results]
+
+    print(f"{'max_tokens':>10}  {'content':>7}  {'reasoning':>9}  {'finish':<14}  diagnostic")
+    print("-" * 100)
+    for n, s in zip(values, summaries):
+        c = s["content_len"] if s["content_len"] is not None else "—"
+        r = s["reasoning_len"] if s["reasoning_len"] is not None else "—"
+        finish = s["finish_reason"] or "—"
+        print(f"{n:>10}  {str(c):>7}  {str(r):>9}  {finish:<14}  {classify(s)}")
+
+    # Indice de seuil : premier max_tokens où content_len > 0 et finish != length
+    ok = [n for n, s in zip(values, summaries)
+          if s["content_len"] and s["finish_reason"] != "length"]
+    if ok:
+        print(f"\n→ Seuil utile détecté : {ok[0]} (premier max_tokens avec content non-vide et non tronqué)")
+    else:
+        print("\n→ Aucune valeur testée n'a produit de réponse complète. Augmenter la plage ou vérifier le prompt.")
+    return 0
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Probe LLM providers for raw response format")
     parser.add_argument("--model", help="Ne tester qu'un seul modèle (nom logique)")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--json", action="store_true", help="Dump JSON brut (raw par modèle)")
+    parser.add_argument(
+        "--sweep",
+        type=parse_sweep,
+        help="Liste de max_tokens à tester en boucle (ex: 500,1000,2000,4000). Requiert --model.",
+    )
     args = parser.parse_args()
 
     models = load_models()
@@ -225,6 +269,12 @@ async def main() -> int:
         if not models:
             print(f"Modèle '{args.model}' introuvable ou non enabled.", file=sys.stderr)
             return 1
+
+    if args.sweep:
+        if len(models) != 1:
+            print("--sweep nécessite --model (un seul modèle à la fois).", file=sys.stderr)
+            return 1
+        return await run_sweep(models[0], args.prompt, args.sweep)
 
     print(f"Prompt: {args.prompt!r} | max_tokens={args.max_tokens} | {len(models)} modèles", file=sys.stderr)
 

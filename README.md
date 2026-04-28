@@ -393,30 +393,94 @@ uv run scripts/consolidate_usage.py --json | jq '.by_model'
 
 Par défaut, lit `~/.config/mcp/llm-sparring/usage.jsonl` ; `--file <path>` pour un autre chemin.
 
+## Scripts
+
+Trois utilitaires CLI dans `scripts/`, tous lancés via `uv run` :
+
+| Script | Rôle | Quand l'utiliser |
+|--------|------|------------------|
+| `probe_providers.py` | Envoie un prompt trivial à un ou tous les modèles, dumpe le raw HTTP | Modèle qui renvoie vide, tronqué, erreur, ou `circuit breaker open` |
+| `consolidate_usage.py` | Agrège `usage.jsonl` par session / jour / modèle / outil | Audit rétro d'un sparring, top sessions par coût |
+| `refresh_pricing.py` | Re-télécharge `pricing.json` depuis LiteLLM | Trimestriel, ou modèle absent du JSON |
+
 ## Diagnosing providers
 
-Un modèle qui renvoie systématiquement vide, tronqué ou "circuit breaker open" ? `scripts/probe_providers.py` envoie un prompt trivial et dumpe le raw response pour identifier la cause :
+Un modèle qui renvoie systématiquement vide, tronqué ou "circuit breaker open" ? `scripts/probe_providers.py` envoie un prompt trivial et dumpe la réponse HTTP brute du provider — sans passer par le parser interne, donc sans masquer où disparaît le contenu.
+
+### Flags
+
+| Flag | Défaut | Effet |
+|------|--------|-------|
+| `--model <name>` | tous les `enabled` | Ne tester qu'un seul modèle (nom logique de `config.yaml`) |
+| `--prompt "..."` | `"Dis bonjour en une phrase."` | Prompt custom (utile pour tester un cas qui a échoué en prod) |
+| `--max-tokens <N>` | `200` | Budget tokens pour la requête |
+| `--sweep "500,1000,2000,4000"` | — | Boucle sur plusieurs `max_tokens` pour identifier le seuil utile. Requiert `--model`. |
+| `--json` | tableau humain | Dump JSON brut (raw par modèle) pour analyse externe |
+
+### Workflows
+
+**1. Triage global** — tous les modèles enabled, format humain :
 
 ```bash
-# Triage complet sur tous les modèles enabled
 uv run scripts/probe_providers.py
-
-# Zoom sur un modèle spécifique
-uv run scripts/probe_providers.py --model or-zai-glm --max-tokens 2000
-
-# JSON brut pour analyse
-uv run scripts/probe_providers.py --json > /tmp/probe.json
 ```
 
-Cartographie des signaux :
+**2. Tester un modèle spécifique** — ex. après une erreur deepseek :
+
+```bash
+uv run scripts/probe_providers.py --model deepseek-v4-flash
+uv run scripts/probe_providers.py --model deepseek-v4-flash --max-tokens 4000
+uv run scripts/probe_providers.py --model deepseek-v4-flash --prompt "<le prompt qui a foiré>"
+```
+
+Lire la ligne `Diagnostic` puis le bloc `Détails` : `content_len`, `reasoning_len`, `finish_reason`, `message_keys` indiquent où est passé le texte. Un `HTTP 401` sur toutes les valeurs signifie que la clé API du provider n'est pas chargée — vérifier `.env`.
+
+**3. Trouver le `max_tokens` minimum utile** — ex. pour kimi qui retourne `null` :
+
+```bash
+uv run scripts/probe_providers.py --model or-kimi-k2 --sweep 500,1000,2000,4000,8000
+```
+
+Sortie type :
+
+```
+max_tokens  content  reasoning  finish          diagnostic
+   500          0        487    length          ⚠️  content vide MAIS reasoning_content présent (487 chars) — thinking model
+  1000          0        923    length          ⚠️  tronqué avant tout content (finish=length) — augmenter max_tokens
+  2000         42       1450    stop            OK — 42 chars (finish=stop)
+  4000        180       1502    stop            OK — 180 chars (finish=stop)
+  8000        180       1502    stop            OK — 180 chars (finish=stop)
+
+→ Seuil utile détecté : 2000 (premier max_tokens avec content non-vide et non tronqué)
+```
+
+Ensuite, propager le seuil dans `~/.config/mcp/llm-sparring/config.yaml` :
+
+```yaml
+- name: "or-kimi-k2"
+  provider: "openrouter"
+  model_id: "moonshotai/kimi-k2"
+  default_max_tokens: 2000   # ou 4000 pour marge de sécurité
+  enabled: true
+```
+
+**4. Raw JSON pour analyse fine** — utile quand le format est inconnu :
+
+```bash
+uv run scripts/probe_providers.py --model <name> --json | jq '.[0].raw.choices[0].message | keys'
+```
+
+### Cartographie des signaux
 
 | Symptôme | Colonne à vérifier | Action |
 |----------|-------------------|--------|
-| `content_len=0` + `reasoning_len>0` | reasoning-only response | Monter `default_max_tokens` pour ce modèle |
-| `finish_reason=length` + `content_len<50` | thinking tokens épuisent le budget | Idem — 4000-8000 pour reasoning models |
+| `content_len=0` + `reasoning_len>0` | reasoning-only response | Monter `default_max_tokens` pour ce modèle (sweep recommandé) |
+| `finish_reason=length` + `content_len<50` | thinking tokens épuisent le budget | Idem — sweep `2000,4000,8000` |
 | `finish_reason=content_filter` | modération provider | Reformuler le prompt |
 | `HTTP 400 max_tokens unsupported` | GPT-5 / o-series | Déjà géré automatiquement (helper `_max_tokens_param`) |
 | `<think>` dans `content_preview` | reasoning model local | Strip automatique, vérifier qu'il y a un `</think>` |
+| `HTTP 401/403` | clé API absente ou invalide | Vérifier `.env` ou bloc `env` MCP |
+| `ERREUR: TimeoutException` | endpoint lent / surchargé | Augmenter `settings.default_timeout` |
 
 ## Usage with /sparring
 
@@ -530,8 +594,8 @@ This runs the full orchestration flow (framing, ask_all, challenge, synthesis).
 
 Trois causes fréquentes sur les reasoning models (Gemini 3, GPT-5, o-series, GLM, Qwen thinking, phi-4 local) :
 
-1. **`max_tokens` trop bas** — les thinking tokens invisibles consomment le budget avant que le modèle ne produise du texte. Relever `default_max_tokens` pour ce modèle (voir table dans la section Configuration).
-2. **Champ reasoning mal routé** — Zhipu met la réponse dans `reasoning_content`, OpenRouter dans `reasoning`, phi-4 local dans `<think>` inline. Le parser gère les trois automatiquement ; si ça casse, lancer `scripts/probe_providers.py --model <name>` pour confirmer le format.
+1. **`max_tokens` trop bas** — les thinking tokens invisibles consomment le budget avant que le modèle ne produise du texte. Pour trouver le seuil utile : `uv run scripts/probe_providers.py --model <name> --sweep 500,1000,2000,4000,8000` (voir section "Diagnosing providers"). Puis relever `default_max_tokens` pour ce modèle dans `config.yaml`.
+2. **Champ reasoning mal routé** — Zhipu met la réponse dans `reasoning_content`, OpenRouter dans `reasoning`, phi-4 local dans `<think>` inline. Le parser gère les trois automatiquement ; si ça casse, lancer `scripts/probe_providers.py --model <name> --json` pour confirmer le format.
 3. **Circuit breaker ouvert** — après 3 erreurs consécutives le modèle est mis au frigo 5 min. Vérifier `get_models()` → champ `breaker`. Le compteur se remet à zéro au premier succès ou au redémarrage du serveur.
 
 ## Development
