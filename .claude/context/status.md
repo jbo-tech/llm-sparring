@@ -4,9 +4,24 @@
 Build an MCP server that orchestrates sparring sessions between LLMs — query multiple models, have them challenge each other, sharpen ideas through productive friction.
 
 ## Current focus
-Robustesse des providers face aux reasoning models (thinking tokens, content null, `max_completion_tokens`) et suivi facturation par session via journal JSONL.
+Ajout de nouveaux providers (Moonshot/Kimi, z.ai/GLM).
 
 ## Log
+
+### 2026-05-17
+- Done: Ajout providers `moonshot` (Kimi, `https://api.moonshot.ai/v1`, `MOONSHOT_API_KEY`) et `zai` (z.ai/GLM, `https://api.z.ai/api/coding/paas/v4`, `ZAI_API_KEY`) dans `PROVIDER_REGISTRY` + `ALLOWED_HOSTS` (`providers.py`).
+- Done: Entrées modèles dans `config.yaml` — `kimi` (`moonshot-v1-auto`) et `zai-glm` (`glm-4-plus`), disabled par défaut.
+- Note: z.ai utilise des modèles GLM (pas DeepSeek). Erreur corrigée en cours de session.
+- Pending: Changements non commités (providers.py, config.yaml, fichiers contexte).
+- Next: Commit, tester avec clés API réelles (`--sweep` sur kimi et zai-glm). Vérifier si z.ai accepte le format OpenAI-compat standard ou nécessite des ajustements (headers, format body).
+
+### 2026-04-28
+- Done: `scripts/probe_providers.py` reçoit un flag `--sweep "v1,v2,v3"` qui boucle sur plusieurs `max_tokens` pour un seul modèle, affiche un tableau `max_tokens / content / reasoning / finish / diagnostic`, et détecte automatiquement le premier seuil utile (content non-vide + `finish ≠ length`).
+- Done: README — section "Diagnosing providers" étoffée. Nouvelle table récap des 3 scripts (`probe_providers`, `consolidate_usage`, `refresh_pricing`). Table exhaustive des flags de probe (incluant `--prompt` et `--json` qui n'étaient pas documentés). Quatre workflows concrets : triage global, test ciblé deepseek, sweep kimi avec sortie type, raw JSON + jq. Cartographie des signaux étendue (HTTP 401/403, timeout). Lien depuis Troubleshooting "Réponse vide/tronquée" vers la commande sweep.
+- Observé : test `--sweep` sur `deepseek-v4-flash` → HTTP 401 sur toutes les valeurs. Donc l'erreur deepseek que l'utilisateur avait rencontrée venait probablement d'une `DEEPSEEK_API_KEY` absente du `.env`, pas d'un souci de parser ou de `max_tokens`. Cas déjà couvert par l'anti-pattern « Clés API absentes sans feedback » (2026-04-21).
+- Done: Refresh incident `pricing.json` (2688 entrées) en testant `refresh_pricing.py --help` — le script s'exécute directement sans flag, donc l'invoquer pour voir l'aide déclenche le download.
+- Commits: `8c1463b` (feat probe + docs), `7496f6c` (chore pricing). Push master OK.
+- Next: Quand l'utilisateur retombe sur l'erreur deepseek, lancer `--sweep` sur le vrai modèle pour confirmer que le seuil est bien un problème de clé API et non de budget tokens. Envisager `--help` propre pour `refresh_pricing.py` (early-exit avant le téléchargement).
 
 ### 2026-04-23
 - Done: Parser OpenAI-compat refait (`providers._parse_openai_compat_response`) — distingue 4 modes d'échec : `truncated before content`, `truncated during reasoning`, `content_filter`, `empty response`. Lit `reasoning_content` (Zhipu/DeepSeek) ET `reasoning` (OpenRouter). Surface `finish_reason`.

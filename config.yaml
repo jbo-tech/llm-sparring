@@ -16,6 +16,8 @@
 #   - groq        → GROQ_API_KEY (fast inference)
 #   - together    → TOGETHER_API_KEY
 #   - xai         → XAI_API_KEY (Grok)
+#   - moonshot    → MOONSHOT_API_KEY (Kimi)
+#   - zai         → ZAI_API_KEY (z.ai)
 #   - custom      → Any OpenAI-compatible endpoint
 #
 # Local (no key):
@@ -135,6 +137,22 @@ models:
   - name: "claude-haiku"
     provider: "anthropic"
     model_id: "claude-3-5-haiku-20241022"
+    enabled: false
+
+  # ===========================================================================
+  # Moonshot (Kimi)
+  # ===========================================================================
+  - name: "kimi"
+    provider: "moonshot"
+    model_id: "moonshot-v1-auto"
+    enabled: false
+
+  # ===========================================================================
+  # z.ai (GLM)
+  # ===========================================================================
+  - name: "zai-glm"
+    provider: "zai"
+    model_id: "glm-4-plus"
     enabled: false
 
   # ===========================================================================

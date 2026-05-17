@@ -15,6 +15,7 @@ plex_*.tar.gz
 # Logs
 logs/
 *.log
+.remember
 
 # Temp
 /tmp/

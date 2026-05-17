@@ -87,3 +87,9 @@ Errors encountered and how to avoid them. Added via `/retro`.
 **Cause**: Bug latent — `ask_all` additionnait `result["cost"]` mais seul le handler Ollama renvoyait ce champ (toujours 0). Les handlers cloud ne l'émettaient pas, leur coût n'était ni agrégé ni persisté.
 **Solution**: Ne jamais dépendre d'un champ optionnel du handler pour la compta. Calculer le coût au niveau handler-consumer via `budget_manager.estimate_request_cost(...)` dans la boucle, toujours, même si le handler le fournit.
 **Date**: 2026-04-23
+
+### Script CLI sans `--help` qui exécute son action au lancement
+**Problem**: Lancer `uv run scripts/refresh_pricing.py --help` pour découvrir les flags déclenche un download complet de `pricing.json` (~1.4 MB) et écrit le fichier. Effet de bord involontaire pendant une simple exploration.
+**Cause**: Le script n'utilise pas `argparse` (pas de flags) et appelle `main()` directement sous `if __name__ == "__main__"`. Aucune branche `--help` ne court-circuite l'action principale.
+**Solution**: Même pour un script sans options, instancier un `argparse.ArgumentParser` minimal et appeler `parser.parse_args()` avant tout effet de bord. Argparse intercepte `--help`/`-h` et exit avant `main()`. Pour les scripts existants, ajouter au moins un check `if "--help" in sys.argv: print(__doc__); sys.exit(0)` en tête.
+**Date**: 2026-04-28

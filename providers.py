@@ -7,7 +7,7 @@ Seul Ollama conserve un handler spécifique (format de réponse différent).
 
 Supported providers:
 - openai, openrouter, mistral, deepseek, groq, together, xai,
-  anthropic, google → OpenAI-compatible
+  anthropic, google, moonshot, zai → OpenAI-compatible
 - ollama → Specific handler (local, no auth, different response format)
 - custom → OpenAI-compatible with custom base_url
 """
@@ -299,6 +299,16 @@ PROVIDER_REGISTRY = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "api_key_env": "GOOGLE_API_KEY",
     },
+    "moonshot": {
+        "type": "openai_compatible",
+        "base_url": "https://api.moonshot.ai/v1",
+        "api_key_env": "MOONSHOT_API_KEY",
+    },
+    "zai": {
+        "type": "openai_compatible",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key_env": "ZAI_API_KEY",
+    },
 }
 
 # Hosts autorisés pour les requêtes (sécurité SSRF)
@@ -313,6 +323,8 @@ ALLOWED_HOSTS = {
     "api.together.xyz",
     "api.x.ai",
     "openrouter.ai",
+    "api.moonshot.ai",
+    "api.z.ai",
     # Local
     "localhost",
     "127.0.0.1",

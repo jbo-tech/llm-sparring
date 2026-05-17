@@ -6,7 +6,7 @@ An MCP server that orchestrates sparring sessions between LLMs. Query multiple m
 
 ## Features
 
-- **Multi-provider**: OpenAI, Anthropic, Google, OpenRouter, Ollama, custom endpoints
+- **Multi-provider**: OpenAI, Anthropic, Google, OpenRouter, Moonshot (Kimi), z.ai (GLM), Ollama, custom endpoints
 - **Reasoning-model aware**: Parser unifié qui gère `reasoning_content`, `reasoning` (OpenRouter), `<think>` inline (phi-4, QwQ), `max_completion_tokens` (GPT-5 / o-series), `finish_reason` exposé au caller
 - **Budget control**: Session, daily, per-request limits + journal append-only avec `session_id` pour consolider a posteriori (par modèle, par sparring)
 - **Circuit breaker**: Désactive automatiquement un provider après N erreurs consécutives (content null, HTTP 5xx, timeout)
@@ -63,6 +63,8 @@ OPENROUTER_API_KEY=sk-or-...
 # DEEPSEEK_API_KEY=...
 # GROQ_API_KEY=...
 # XAI_API_KEY=...
+# MOONSHOT_API_KEY=...
+# ZAI_API_KEY=...
 # ANTHROPIC_API_KEY=...   # rarement utile (on EST Claude)
 EOF
 chmod 600 ~/.claude/mcp/llm-sparring/.env
@@ -315,6 +317,8 @@ settings:
 | `groq` | `GROQ_API_KEY` | OpenAI-compat | Very fast inference |
 | `together` | `TOGETHER_API_KEY` | OpenAI-compat | Open source models |
 | `xai` | `XAI_API_KEY` | OpenAI-compat | Grok |
+| `moonshot` | `MOONSHOT_API_KEY` | OpenAI-compat | Kimi |
+| `zai` | `ZAI_API_KEY` | OpenAI-compat | GLM (z.ai) |
 | `custom` | Custom | OpenAI-compat | Any compatible endpoint |
 | `ollama` | — | Ollama | Local models, free (dedicated handler) |
 
